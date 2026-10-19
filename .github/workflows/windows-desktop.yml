@@ -1,0 +1,57 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Prototype only: compiles the existing Compose Desktop entry point into a Windows MSI.
+name: Windows desktop installer (prototype)
+
+on:
+  push:
+    branches:
+      - 'windows/**'
+    paths:
+      - '.github/workflows/windows-desktop.yml'
+      - 'desktopApp/**'
+      - 'shared/**'
+      - 'gradle/**'
+      - 'gradlew*'
+      - 'buildSrc/**'
+      - '*.gradle.kts'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  package-windows:
+    name: Build MSI on Windows
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v6
+
+      - name: Install Java 21
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Install Android SDK tools for shared project configuration
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android API 37 used by upstream
+        shell: pwsh
+        run: sdkmanager "platforms;android-37"
+
+      - name: Configure Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Package desktop application as MSI
+        shell: pwsh
+        run: .\gradlew.bat :desktopApp:packageMsi --stacktrace --no-configuration-cache
+
+      - name: Upload Windows installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: newpipe-windows-prototype-msi
+          path: desktopApp/build/compose/binaries/main/msi/*.msi
+          if-no-files-found: error
+          retention-days: 14
