@@ -150,6 +150,10 @@ internal class MpvNativeController {
     }
 
     @Synchronized
+    fun openOrSwitch(surface: Canvas, source: PlaybackOption): String? =
+        if (instance == null) open(surface, source) else switchSource(source)
+
+    @Synchronized
     fun snapshot(): MpvReading? {
         val l = native ?: return null
         val ctx = instance ?: return null
