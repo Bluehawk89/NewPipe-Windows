@@ -6,6 +6,7 @@ This repository is an **independent, unofficial Windows desktop port experiment*
 
 - **NewPipe application and shared desktop framework:** developed by the original NewPipe contributors. Project: https://github.com/TeamNewPipe/NewPipe
 - **NewPipe Extractor:** developed by TeamNewPipe and its contributors. Project: https://github.com/TeamNewPipe/NewPipeExtractor
+- **vlcj desktop media-player integration:** created by Caprica Software Limited and contributors. Project: https://github.com/caprica/vlcj (GPL-3.0-or-later). This independent fork uses it for its experimental Windows playback UI; libVLC is provided by the VideoLAN project and has its own applicable licensing and notices.
 - **Other dependencies, code, translations, graphics, and libraries:** their respective contributors and licensors; see upstream notices, source headers and generated third-party license information where applicable.
 - Windows-specific contributions in this fork are independent modifications. Do **not** attribute those modifications to the upstream team.
 
