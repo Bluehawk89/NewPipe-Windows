@@ -104,20 +104,81 @@ internal object DesktopVideoSearch {
             .distinctBy { it.url }
             .take(6)
 
-        val hls = info.hlsUrl?.takeIf { it.startsWith("https://") }
-            ?.let { listOf(PlaybackOption(it, "HLS / live stream")) }
+        val hlsUrl = info.hlsUrl?.takeIf { it.startsWith("https://") }
+        val hls = hlsUrl?.let { listOf(PlaybackOption(it, "HLS master / live stream")) }
             .orEmpty()
+        // A DASH MPD may be usable even when separate progressive video
+        // and audio are unavailable to the JVM extractor.
+        val dash = info.dashMpdUrl?.takeIf { it.startsWith("https://") }
+            ?.let { listOf(PlaybackOption(it, "DASH manifest")) }
+            .orEmpty()
+        val hlsVariants = hlsUrl?.let { extractHlsVariants(it) }.orEmpty()
+        // Individual HLS variants can play when VLC fails to negotiate the master.
+        // Prefer the master first for correct alternate audio-track negotiation,
+        // then try variants and DASH as fallback.
         val options = if (info.streamType.toString().contains("LIVE")) {
-            (hls + progressive)
+            (hls + hlsVariants + dash + progressive)
         } else {
-            (progressive + hls)
-        }.distinctBy { it.url }
+            (progressive + dash + hls + hlsVariants)
+        }.distinctBy { it.url }.take(14)
         if (options.isEmpty()) {
             throw IllegalStateException(
                 "No compatible combined audio/video or HLS stream was found for this video."
             )
         }
         return options
+    }
+
+    /**
+     * Read only a small bounded amount of an HLS master playlist. This is run
+     * on the IO dispatcher, never from the desktop UI thread.
+     * URLs are returned to the player but must never be included in diagnostics.
+     */
+    private fun extractHlsVariants(masterUrl: String): List<PlaybackOption> {
+        return try {
+            val outgoing = okhttp3.Request.Builder()
+                .url(masterUrl)
+                .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36")
+                .header("Referer", "https://www.youtube.com/")
+                .get().build()
+            client.newCall(outgoing).execute().use { response ->
+                if (!response.isSuccessful) return emptyList()
+                val text = response.body?.byteStream()?.use {
+                    String(it.readNBytes(256 * 1024), Charsets.UTF_8)
+                } ?: return emptyList()
+                if (!text.trimStart().startsWith("#EXTM3U")) return emptyList()
+                val base = response.request.url.toUri()
+                val choices = mutableListOf<PlaybackOption>()
+                var streamMetadata: String? = null
+                for (line in text.lineSequence().take(2000)) {
+                    val raw = line.trim()
+                    when {
+                        raw.startsWith("#EXT-X-STREAM-INF:") -> streamMetadata = raw
+                        raw.isNotBlank() && !raw.startsWith("#") && streamMetadata != null -> {
+                            val variantUri = runCatching { base.resolve(raw) }.getOrNull()
+                            if (variantUri?.scheme.equals("https", ignoreCase = true)) {
+                                val height = Regex("RESOLUTION=\\d+x(\\d+)")
+                                    .find(streamMetadata)?.groupValues?.getOrNull(1)
+                                choices.add(
+                                    PlaybackOption(
+                                        variantUri.toString(),
+                                        if (height == null) "HLS variant" else "HLS ${height}p"
+                                    )
+                                )
+                            }
+                            streamMetadata = null
+                        }
+                    }
+                }
+                choices.distinctBy { it.url }.sortedByDescending { option ->
+                    val h = Regex("(\\d{3,4})p").find(option.label)
+                        ?.groupValues?.getOrNull(1)?.toIntOrNull() ?: 0
+                    if (h <= 720) h else 720 - (h - 720)
+                }.take(8)
+            }
+        } catch (_: Exception) {
+            emptyList()
+        }
     }
 
     fun resolvePlaybackUrl(videoUrl: String): String = resolvePlaybackOptions(videoUrl).first().url
