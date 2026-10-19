@@ -81,15 +81,9 @@ internal fun DesktopMpvComparisonPlayer(video: VideoResult) {
         reading = null
         try {
             candidates = withContext(Dispatchers.IO) {
-                val all = DesktopVideoSearch.resolvePlaybackOptions(video.url)
-                // Let mpv negotiate all rendition groups from the HLS
-                // master itself before trying video-only child playlists.
-                val masters = all.filter { it.label.startsWith("HLS master") }
-                val muxed = all.filter {
-                    it.audioUrl == null && !it.label.startsWith("HLS") &&
-                        !it.label.startsWith("DASH")
-                }
-                (muxed + masters + all).distinctBy { it.url }.take(14)
+                MpvStreamSelection.prioritize(
+                    DesktopVideoSearch.resolvePlaybackOptions(video.url)
+                )
             }
             selectedIndex = 0
             if (candidates.isEmpty()) error = "NewPipe Extractor did not find a playable format."
