@@ -27,6 +27,9 @@ dependencies {
     implementation(libs.coil.network.okhttp)
     // Native LibVLC-backed embedded player. Test builds require VLC installed locally.
     implementation("uk.co.caprica:vlcj:4.11.0")
+
+    // Portable JVM parser and playback regression tests (no GUI/network needed).
+    testImplementation(libs.junit)
 }
 
 compose.desktop {
