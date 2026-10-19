@@ -36,6 +36,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -81,29 +82,46 @@ internal fun DesktopHome(onAbout: () -> Unit) {
     var loading by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     var selectedVideo by remember { mutableStateOf<VideoResult?>(null) }
-    var engineComparisonMpv by remember { mutableStateOf(false) }
+    // During the experimental quality audit prefer the user-verified mpv
+    // backend, while leaving the VLC baseline accessible for comparison.
+    var engineComparisonMpv by remember { mutableStateOf(true) }
+    var searchGeneration by remember { mutableIntStateOf(0) }
     val scope = rememberCoroutineScope()
     var searchJob by remember { mutableStateOf<Job?>(null) }
 
     fun doSearch(term: String = query) {
         val clean = term.trim()
         if (clean.isEmpty()) return
+        // Searching is a navigation action. Release the active video
+        // composition/player before showing results, rather than leaving
+        // search results obscured behind a still-playing media surface.
+        selectedVideo = null
+        engineComparisonMpv = true
         query = clean
         searchedTerm = clean
         section = Section.SEARCH
         loading = true
         error = null
         results = emptyList()
+        searchGeneration += 1
+        val generation = searchGeneration
         searchJob?.cancel()
         searchJob = scope.launch {
             try {
                 val found = withContext(Dispatchers.IO) { DesktopVideoSearch.search(clean) }
-                results = found
+                if (generation == searchGeneration) results = found
             } catch (ex: Exception) {
                 if (ex is kotlinx.coroutines.CancellationException) throw ex
-                error = ex.message ?: "Search failed. Please try again."
+                // Extractor exception messages can include transient signed
+                // media URLs, request headers or other private transport data.
+                if (generation == searchGeneration) {
+                    error = "Search failed (" + ex.javaClass.simpleName +
+                        "). Check your connection and try again."
+                }
             } finally {
-                loading = false
+                // A canceled old search must not clear the spinner for the
+                // latest search or overwrite its results.
+                if (generation == searchGeneration) loading = false
             }
         }
     }
@@ -184,7 +202,7 @@ internal fun DesktopHome(onAbout: () -> Unit) {
                             durationSeconds = 0L,
                             views = -1L
                         )
-                        engineComparisonMpv = false
+                        engineComparisonMpv = true
                     }) { Text("Open known playback test video") }
                     Spacer(Modifier.height(12.dp))
                     val selected = selectedVideo
@@ -195,7 +213,7 @@ internal fun DesktopHome(onAbout: () -> Unit) {
                         ) {
                             OutlinedButton(onClick = {
                                 selectedVideo = null
-                                engineComparisonMpv = false
+                                engineComparisonMpv = true
                                 section = Section.SEARCH
                             }) { Text("← Search results") }
                             Button(
@@ -205,7 +223,7 @@ internal fun DesktopHome(onAbout: () -> Unit) {
                             Button(
                                 enabled = !engineComparisonMpv,
                                 onClick = { engineComparisonMpv = true }
-                            ) { Text("mpv experiment") }
+                            ) { Text("mpv (preferred test)") }
                         }
                         Spacer(Modifier.height(8.dp))
                         if (engineComparisonMpv) {
@@ -246,7 +264,7 @@ internal fun DesktopHome(onAbout: () -> Unit) {
                                 results.isEmpty() -> Text("No videos found for this search.", color = muted)
                                 else -> {
                                     Text(
-                                        "${results.size} video results • Open in browser temporarily; native playback is next.",
+                                        "${results.size} results • Play natively or open in your browser.",
                                         color = muted,
                                         style = MaterialTheme.typography.bodySmall
                                     )
@@ -254,7 +272,7 @@ internal fun DesktopHome(onAbout: () -> Unit) {
                                     LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                                         items(results) { video ->
                                             VideoRow(video, onPlay = {
-                                                engineComparisonMpv = false
+                                                engineComparisonMpv = true
                                                 selectedVideo = video
                                             })
                                         }
@@ -309,7 +327,7 @@ private fun HomeWelcome(onQuickSearch: (String) -> Unit) {
     }
     Spacer(Modifier.height(20.dp))
     Text(
-        "Coming next: built-in playback, subscriptions, history and downloads.",
+        "Native playback is being refined. Local subscriptions, history and downloads come next.",
         color = muted,
         style = MaterialTheme.typography.bodySmall
     )
