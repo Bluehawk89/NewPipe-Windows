@@ -116,10 +116,14 @@ internal object DesktopVideoSearch {
         // Individual HLS variants can play when VLC fails to negotiate the master.
         // Prefer the master first for correct alternate audio-track negotiation,
         // then try variants and DASH as fallback.
+        // Prefer properly paired audio+video HLS renditions before a master
+        // that may start silently on older LibVLC 3.x installations.
+        val withAudio = hlsVariants.filter { it.audioUrl != null }
+        val withoutAudio = hlsVariants.filter { it.audioUrl == null }
         val options = if (info.streamType.toString().contains("LIVE")) {
-            (hls + hlsVariants + dash + progressive)
+            (withAudio + hls + withoutAudio + dash + progressive)
         } else {
-            (progressive + dash + hls + hlsVariants)
+            (progressive + dash + withAudio + hls + withoutAudio)
         }.distinctBy { it.url }.take(14)
         if (options.isEmpty()) {
             throw IllegalStateException(
