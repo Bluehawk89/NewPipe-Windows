@@ -42,6 +42,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import uk.co.caprica.vlcj.media.MediaSlavePriority
 import uk.co.caprica.vlcj.media.MediaSlaveType
 import uk.co.caprica.vlcj.player.component.EmbeddedMediaPlayerComponent
@@ -94,7 +95,7 @@ internal fun DesktopVideoPlayer(video: VideoResult, onBack: () -> Unit) {
         }
     }
 
-    Column(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
+    Column(modifier = Modifier.fillMaxSize()) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             OutlinedButton(onClick = onBack) { Text("← Back to results") }
             Spacer(Modifier.width(16.dp))
@@ -175,6 +176,19 @@ internal fun DesktopVideoPlayer(video: VideoResult, onBack: () -> Unit) {
                         audioWaitTicks = 0
 
                         try {
+                            // Never start LibVLC before the native AWT video
+                            // surface has joined the visible window. Otherwise
+                            // some streams start with audio only until a scroll
+                            // or repaint incidentally attaches the surface.
+                            val videoSurfaceReady = withTimeoutOrNull(8000L) {
+                                while (!player.isShowing) {
+                                    delay(100)
+                                }
+                                true
+                            } ?: false
+                            if (!videoSurfaceReady) {
+                                throw IllegalStateException("video surface not visible")
+                            }
                             val accepted = withContext(Dispatchers.IO) {
                                 // vlcj needs to finish the prior attempt before
                                 // switching an existing native player to a new media.
@@ -311,9 +325,19 @@ internal fun DesktopVideoPlayer(video: VideoResult, onBack: () -> Unit) {
                         }
                     }
 
-                    Box(Modifier.fillMaxWidth().height(420.dp).background(Color.Black)) {
+                    // LibVLC paints into a heavyweight AWT video surface. That
+                    // surface must NOT be inside a Compose verticalScroll: AWT
+                    // cannot reliably follow Compose clipping/transforms, which
+                    // results in sound without picture, flickering and frozen
+                    // frames when the user scrolls.
+                    Box(Modifier.fillMaxWidth().weight(1f).background(Color.Black)) {
                         SwingPanel(factory = { player }, modifier = Modifier.fillMaxSize())
                     }
+                    // Only the controls scroll; the SwingPanel stays pinned.
+                    Column(
+                        modifier = Modifier.fillMaxWidth().height(196.dp)
+                            .verticalScroll(rememberScrollState())
+                    ) {
                     Spacer(Modifier.height(10.dp))
                     Text(
                         status,
@@ -391,7 +415,7 @@ internal fun DesktopVideoPlayer(video: VideoResult, onBack: () -> Unit) {
                             )
                             OutlinedButton(onClick = {
                                 val report = listOf(
-                                    "Unofficial Windows M2.5 audio diagnostic",
+                                    "Unofficial Windows M2.6 audio diagnostic",
                                     "Video: " + video.url,
                                     "Candidate: " + candidate.label,
                                     "VLC audio tracks: " + audioTrackCount,
@@ -449,6 +473,7 @@ internal fun DesktopVideoPlayer(video: VideoResult, onBack: () -> Unit) {
                     Spacer(Modifier.height(8.dp))
                     OutlinedButton(onClick = { openBrowser(video.url) }) {
                         Text("Open in browser ↗")
+                    }
                     }
                 }
             }
@@ -561,7 +586,7 @@ private fun buildDiagnostics(
     attempts: List<String>,
     mediaProbe: String
 ): String = (
-    listOf("Unofficial Windows M2.5 playback diagnostic", "Video: " + videoUrl) +
+    listOf("Unofficial Windows M2.6 playback diagnostic", "Video: " + videoUrl) +
         attempts + mediaProbe
 ).joinToString("\n")
 
