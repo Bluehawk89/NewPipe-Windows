@@ -80,6 +80,7 @@ internal fun DesktopHome(onAbout: () -> Unit) {
     var results by remember { mutableStateOf<List<VideoResult>>(emptyList()) }
     var loading by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
+    var selectedVideo by remember { mutableStateOf<VideoResult?>(null) }
     val scope = rememberCoroutineScope()
     var searchJob by remember { mutableStateOf<Job?>(null) }
 
@@ -128,7 +129,7 @@ internal fun DesktopHome(onAbout: () -> Unit) {
                         Spacer(Modifier.width(10.dp))
                         Column {
                             Text("NewPipe", fontWeight = FontWeight.Bold)
-                            Text("WINDOWS · ALPHA", color = muted, style = MaterialTheme.typography.labelSmall)
+                            Text("UNOFFICIAL WINDOWS ALPHA", color = muted, style = MaterialTheme.typography.labelSmall)
                         }
                     }
                     Spacer(Modifier.height(36.dp))
@@ -136,7 +137,10 @@ internal fun DesktopHome(onAbout: () -> Unit) {
                         SidebarItem(
                             title = entry.label,
                             selected = section == entry,
-                            onClick = { section = entry }
+                            onClick = {
+                                selectedVideo = null
+                                section = entry
+                            }
                         )
                         Spacer(Modifier.height(6.dp))
                     }
@@ -168,7 +172,13 @@ internal fun DesktopHome(onAbout: () -> Unit) {
                         }
                     }
                     Spacer(Modifier.height(28.dp))
-                    when (section) {
+                    val selected = selectedVideo
+                    if (selected != null) {
+                        DesktopVideoPlayer(video = selected, onBack = {
+                            selectedVideo = null
+                            section = Section.SEARCH
+                        })
+                    } else when (section) {
                         Section.HOME -> HomeWelcome(onQuickSearch = { doSearch(it) })
                         Section.SEARCH -> {
                             Text(
@@ -204,7 +214,9 @@ internal fun DesktopHome(onAbout: () -> Unit) {
                                     )
                                     Spacer(Modifier.height(14.dp))
                                     LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                                        items(results) { video -> VideoRow(video) }
+                                        items(results) { video ->
+                                            VideoRow(video, onPlay = { selectedVideo = video })
+                                        }
                                     }
                                 }
                             }
@@ -272,7 +284,7 @@ private fun FeatureComingSoon(label: String) {
 }
 
 @Composable
-private fun VideoRow(video: VideoResult) {
+private fun VideoRow(video: VideoResult, onPlay: () -> Unit) {
     var openError by remember(video.url) { mutableStateOf(false) }
     Surface(
         color = panel,
@@ -311,6 +323,8 @@ private fun VideoRow(video: VideoResult) {
                         style = MaterialTheme.typography.bodySmall
                     )
                     Spacer(Modifier.height(9.dp))
+                    Button(onClick = onPlay) { Text("▶ Play in app") }
+                    Spacer(Modifier.height(5.dp))
                     OutlinedButton(onClick = {
                         openError = runCatching {
                             if (!Desktop.isDesktopSupported()) error("Desktop browsing is unavailable")

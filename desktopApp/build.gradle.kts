@@ -25,6 +25,8 @@ dependencies {
     implementation(libs.squareup.okhttp)
     implementation(libs.coil.compose)
     implementation(libs.coil.network.okhttp)
+    // Native LibVLC-backed embedded player. Test builds require VLC installed locally.
+    implementation("uk.co.caprica:vlcj:4.11.0")
 }
 
 compose.desktop {
