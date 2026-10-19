@@ -6,11 +6,14 @@ package net.newpipe.app
 
 import okhttp3.OkHttpClient
 import okhttp3.RequestBody.Companion.toRequestBody
+import org.schabi.newpipe.extractor.MediaFormat
 import org.schabi.newpipe.extractor.NewPipe
 import org.schabi.newpipe.extractor.downloader.Downloader
 import org.schabi.newpipe.extractor.downloader.Request
 import org.schabi.newpipe.extractor.downloader.Response
 import org.schabi.newpipe.extractor.search.SearchInfo
+import org.schabi.newpipe.extractor.stream.DeliveryMethod
+import org.schabi.newpipe.extractor.stream.VideoStream
 import org.schabi.newpipe.extractor.stream.StreamInfo
 import org.schabi.newpipe.extractor.stream.StreamInfoItem
 import java.util.concurrent.TimeUnit
@@ -78,25 +81,54 @@ internal object DesktopVideoSearch {
     }
 
     /**
-     * Obtain a playable progressive video+audio URL for VLC.
-     * Video-only streams need separate audio handling and are intentionally not used yet.
+     * Return alternative combined audio/video streams, including HLS, so VLC
+     * failures can be recovered without repeating extraction.
      */
-    fun resolvePlaybackUrl(videoUrl: String): String {
+    fun resolvePlaybackOptions(videoUrl: String): List<PlaybackOption> {
         val info = StreamInfo.getInfo(videoUrl)
-        val streams = info.videoStreams.orEmpty()
-            .filter { it.isUrl && it.content.startsWith("https://") }
-            .sortedByDescending { stream ->
-                Regex("(\\d{3,4})").find(stream.resolution.orEmpty())?.value?.toIntOrNull() ?: 0
-            }
-        val stream = streams.firstOrNull { it.resolution.contains("720") }
-            ?: streams.firstOrNull { it.resolution.contains("480") }
-            ?: streams.firstOrNull { it.resolution.contains("360") }
-            ?: streams.firstOrNull()
-        return stream?.content
-            ?: info.hlsUrl?.takeIf { it.startsWith("https://") }
-            ?: throw IllegalStateException(
-                "No compatible combined audio/video stream was found for this video."
+        val progressive = info.videoStreams.orEmpty()
+            .filter { !it.isVideoOnly && it.isUrl && it.content.startsWith("https://") }
+            .sortedWith(
+                compareByDescending<VideoStream> {
+                    if (it.deliveryMethod == DeliveryMethod.PROGRESSIVE_HTTP) 1 else 0
+                }.thenByDescending {
+                    if (it.format == MediaFormat.MPEG_4) 1 else 0
+                }.thenByDescending { qualityPreference(it.resolution) }
             )
+            .map { stream ->
+                PlaybackOption(
+                    url = stream.content,
+                    label = "${stream.format?.name ?: "Video"} ${stream.resolution}".trim()
+                )
+            }
+            .distinctBy { it.url }
+            .take(6)
+
+        val hls = info.hlsUrl?.takeIf { it.startsWith("https://") }
+            ?.let { listOf(PlaybackOption(it, "HLS / live stream")) }
+            .orEmpty()
+        val options = if (info.streamType.toString().contains("LIVE")) {
+            (hls + progressive)
+        } else {
+            (progressive + hls)
+        }.distinctBy { it.url }
+        if (options.isEmpty()) {
+            throw IllegalStateException(
+                "No compatible combined audio/video or HLS stream was found for this video."
+            )
+        }
+        return options
+    }
+
+    fun resolvePlaybackUrl(videoUrl: String): String = resolvePlaybackOptions(videoUrl).first().url
+
+    private fun qualityPreference(resolution: String): Int {
+        val height = Regex("(\\d{3,4})").find(resolution)?.value?.toIntOrNull() ?: 0
+        return when {
+            height in 360..720 -> height
+            height > 720 -> (720 - (height - 720)).coerceAtLeast(0)
+            else -> height
+        }
     }
 }
 
@@ -108,3 +140,5 @@ internal data class VideoResult(
     val durationSeconds: Long,
     val views: Long
 )
+
+internal data class PlaybackOption(val url: String, val label: String)
