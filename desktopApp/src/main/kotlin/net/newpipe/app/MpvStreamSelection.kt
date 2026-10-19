@@ -5,12 +5,16 @@
 package net.newpipe.app
 
 /**
- * Order streams for mpv's independent demuxer. A signed HLS master URL is
- * preferable to a child rendition because it tells the native engine which
- * audio rendition belongs to a video variant. Unlike VLC, mpv can also load
- * separate NewPipe Extractor audio+video tracks via audio-add.
+ * Rank playable sources for mpv using evidence from Windows A/B testing.
  *
- * Only the URL and safe local label are retained; NEVER log stream URLs.
+ * mpv decoded video but could not play the HLS master on the known failure
+ * case; HLS variants explicitly paired with audio were synchronized.
+ * Prefer a muxed stream or a verified video/audio pair, while keeping the
+ * master as a later option for streams where mpv handles it correctly.
+ *
+ * A label is only a format hint, not proof of decodability. Native player
+ * health checks decide whether to advance to the next candidate.
+ * Never log temporary signed media URLs.
  */
 internal object MpvStreamSelection {
     fun prioritize(all: List<PlaybackOption>): List<PlaybackOption> {
@@ -18,9 +22,12 @@ internal object MpvStreamSelection {
             !it.label.startsWith("DASH") &&
             !it.label.startsWith("Separate tracks") &&
             it.audioUrl == null }
-        val masters = all.filter { it.label.startsWith("HLS master") }
         val pairs = all.filter { it.audioUrl != null }
-        return (muxed + masters + pairs + all)
+        val masters = all.filter { it.label.startsWith("HLS master") }
+        // Explicit audio pairing worked on the problematic live-like video,
+        // while the master manifest failed. Avoid making that one bad
+        // candidate block video startup every time.
+        return (muxed + pairs + masters + all)
             .filter { it.url.startsWith("https://") }
             .distinctBy { it.url }
             .take(14)
