@@ -144,7 +144,7 @@ internal class MpvGlRenderBridge {
 
             val callback = object : MpvGpuProcCallback {
                 override fun invoke(context: Pointer?, name: String): Pointer? {
-                    val address = GL.getFunctionProvider().getFunctionAddress(name)
+                    val address = GL.getFunctionProvider()?.getFunctionAddress(name) ?: 0L
                     return if (address == 0L) null else Pointer.createConstant(address)
                 }
             }
