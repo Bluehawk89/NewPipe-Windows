@@ -148,21 +148,51 @@ internal object DesktopVideoSearch {
                 } ?: return emptyList()
                 if (!text.trimStart().startsWith("#EXTM3U")) return emptyList()
                 val base = response.request.url.toUri()
+                val lines = text.lineSequence().map { it.trim() }.take(2000).toList()
+                // An HLS master playlist may provide audio as a separate
+                // EXT-X-MEDIA rendition. Direct video variants can be silent.
+                val audioGroups = mutableMapOf<String, MutableList<HlsAudioRendition>>()
+                lines.filter { it.startsWith("#EXT-X-MEDIA:") }.forEach { tag ->
+                    val metadata = tag.substringAfter(':')
+                    if (hlsAttribute(metadata, "TYPE") != "AUDIO") return@forEach
+                    val group = hlsAttribute(metadata, "GROUP-ID") ?: return@forEach
+                    val rawUri = hlsAttribute(metadata, "URI") ?: return@forEach
+                    val resolved = runCatching { base.resolve(rawUri) }.getOrNull()
+                        ?: return@forEach
+                    if (!resolved.scheme.equals("https", ignoreCase = true)) return@forEach
+                    audioGroups.getOrPut(group) { mutableListOf() }.add(
+                        HlsAudioRendition(
+                            url = resolved.toString(),
+                            default = hlsAttribute(metadata, "DEFAULT") == "YES",
+                            language = hlsAttribute(metadata, "LANGUAGE").orEmpty()
+                        )
+                    )
+                }
                 val choices = mutableListOf<PlaybackOption>()
                 var streamMetadata: String? = null
-                for (line in text.lineSequence().take(2000)) {
-                    val raw = line.trim()
+                for (raw in lines) {
                     when {
-                        raw.startsWith("#EXT-X-STREAM-INF:") -> streamMetadata = raw
+                        raw.startsWith("#EXT-X-STREAM-INF:") -> streamMetadata = raw.substringAfter(':')
                         raw.isNotBlank() && !raw.startsWith("#") && streamMetadata != null -> {
+                            val metadata = streamMetadata.orEmpty()
                             val variantUri = runCatching { base.resolve(raw) }.getOrNull()
                             if (variantUri?.scheme.equals("https", ignoreCase = true)) {
-                                val height = Regex("RESOLUTION=\\d+x(\\d+)")
-                                    .find(streamMetadata)?.groupValues?.getOrNull(1)
+                                val height = hlsAttribute(metadata, "RESOLUTION")
+                                    ?.substringAfter('x', "")?.toIntOrNull()
+                                val audioGroup = hlsAttribute(metadata, "AUDIO")
+                                val audio = audioGroups[audioGroup].orEmpty()
+                                    .sortedWith(
+                                        compareByDescending<HlsAudioRendition> { it.default }
+                                            .thenByDescending { it.language.startsWith("en") }
+                                    ).firstOrNull()
                                 choices.add(
                                     PlaybackOption(
-                                        variantUri.toString(),
-                                        if (height == null) "HLS variant" else "HLS ${height}p"
+                                        url = variantUri.toString(),
+                                        label = (
+                                            if (height == null) "HLS variant"
+                                            else "HLS " + height + "p"
+                                        ) + if (audio != null) " + audio" else "",
+                                        audioUrl = audio?.url
                                     )
                                 )
                             }
@@ -180,6 +210,20 @@ internal object DesktopVideoSearch {
             emptyList()
         }
     }
+
+    private fun hlsAttribute(attributes: String, key: String): String? {
+        val expression = Regex(
+            "(?:^|,)\\s*" + Regex.escape(key) + "=(?:\"([^\"]*)\"|([^,]+))"
+        )
+        val match = expression.find(attributes) ?: return null
+        return (match.groupValues[1].ifEmpty { match.groupValues[2] }).trim()
+    }
+
+    private data class HlsAudioRendition(
+        val url: String,
+        val default: Boolean,
+        val language: String
+    )
 
     fun resolvePlaybackUrl(videoUrl: String): String = resolvePlaybackOptions(videoUrl).first().url
 
@@ -202,4 +246,8 @@ internal data class VideoResult(
     val views: Long
 )
 
-internal data class PlaybackOption(val url: String, val label: String)
+internal data class PlaybackOption(
+    val url: String,
+    val label: String,
+    val audioUrl: String? = null
+)
