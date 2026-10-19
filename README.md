@@ -1,3 +1,11 @@
+> [!IMPORTANT]
+> **Independent Windows port experiment — NOT an official NewPipe release.**
+> This repository is an independently maintained fork of [TeamNewPipe/NewPipe](https://github.com/TeamNewPipe/NewPipe) exploring a Windows desktop application. All credit for original NewPipe software, shared desktop work and NewPipe Extractor belongs to their respective upstream contributors. This fork is **not affiliated with, maintained by, or endorsed by TeamNewPipe or NewPipe e. V.**
+>
+> The README below is preserved from **upstream** and primarily describes the original **Android** app. Our Windows builds are short-lived development prototypes, not official NewPipe installers or stable releases. See [Attribution, licensing and trademark safeguards](PORT_ATTRIBUTION.md) before distributing a modified app.
+
+---
+
 <p align="center"><a href="https://newpipe.net"><img src="assets/new_pipe_icon_5.png" width="150"></a></p> 
 <h2 align="center"><b>NewPipe</b></h2>
 <h4 align="center">A libre lightweight streaming front-end for Android.</h4>
