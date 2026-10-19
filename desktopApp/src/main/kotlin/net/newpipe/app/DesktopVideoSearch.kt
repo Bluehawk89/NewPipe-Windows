@@ -12,6 +12,7 @@ import org.schabi.newpipe.extractor.downloader.Downloader
 import org.schabi.newpipe.extractor.downloader.Request
 import org.schabi.newpipe.extractor.downloader.Response
 import org.schabi.newpipe.extractor.search.SearchInfo
+import org.schabi.newpipe.extractor.stream.AudioStream
 import org.schabi.newpipe.extractor.stream.DeliveryMethod
 import org.schabi.newpipe.extractor.stream.VideoStream
 import org.schabi.newpipe.extractor.stream.StreamInfo
@@ -104,6 +105,42 @@ internal object DesktopVideoSearch {
             .distinctBy { it.url }
             .take(6)
 
+        // YouTube increasingly serves video and audio in separate tracks.
+        // Passing only a videoOnlyStream to a native player causes silent
+        // picture, regardless of whether the decoder is VLC or mpv.
+        // Keep paired tracks available as fallbacks if adaptive HLS fails.
+        val audio = info.audioStreams.orEmpty()
+            .filter { it.isUrl && it.content.startsWith("https://") }
+            .sortedWith(
+                compareByDescending<AudioStream> {
+                    if (it.format == MediaFormat.M4A) 1 else 0
+                }.thenByDescending {
+                    if (it.audioLocale?.language == "en") 1 else 0
+                }.thenByDescending { it.averageBitrate }
+            )
+            .firstOrNull()
+        val dashPairs = if (audio == null) emptyList() else {
+            info.videoOnlyStreams.orEmpty()
+                .filter { it.isVideoOnly && it.isUrl &&
+                    it.content.startsWith("https://") }
+                .sortedWith(
+                    compareByDescending<VideoStream> {
+                        if (it.format == MediaFormat.MPEG_4) 1 else 0
+                    }.thenByDescending { qualityPreference(it.resolution) }
+                )
+                .map { stream ->
+                    PlaybackOption(
+                        url = stream.content,
+                        label = "Separate tracks " +
+                            (stream.format?.name ?: "Video") + " " +
+                            stream.resolution + " + audio",
+                        audioUrl = audio.content
+                    )
+                }
+                .distinctBy { it.url }
+                .take(6)
+        }
+
         val hlsUrl = info.hlsUrl?.takeIf { it.startsWith("https://") }
         val hls = hlsUrl?.let { listOf(PlaybackOption(it, "HLS master / live stream")) }
             .orEmpty()
@@ -121,13 +158,13 @@ internal object DesktopVideoSearch {
         val withAudio = hlsVariants.filter { it.audioUrl != null }
         val withoutAudio = hlsVariants.filter { it.audioUrl == null }
         val options = if (info.streamType.toString().contains("LIVE")) {
-            (withAudio + hls + withoutAudio + dash + progressive)
+            (withAudio + hls + dashPairs + progressive + dash + withoutAudio)
         } else {
-            (progressive + dash + withAudio + hls + withoutAudio)
+            (progressive + dashPairs + dash + withAudio + hls + withoutAudio)
         }.distinctBy { it.url }.take(14)
         if (options.isEmpty()) {
             throw IllegalStateException(
-                "No compatible combined audio/video or HLS stream was found for this video."
+                "No compatible combined, paired or manifest stream was found for this video."
             )
         }
         return options

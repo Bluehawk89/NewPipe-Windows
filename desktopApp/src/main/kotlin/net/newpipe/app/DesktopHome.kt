@@ -81,6 +81,7 @@ internal fun DesktopHome(onAbout: () -> Unit) {
     var loading by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     var selectedVideo by remember { mutableStateOf<VideoResult?>(null) }
+    var engineComparisonMpv by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     var searchJob by remember { mutableStateOf<Job?>(null) }
 
@@ -171,13 +172,50 @@ internal fun DesktopHome(onAbout: () -> Unit) {
                             Text("Search")
                         }
                     }
-                    Spacer(Modifier.height(28.dp))
+                    Spacer(Modifier.height(8.dp))
+                    OutlinedButton(onClick = {
+                        // A fixed known regression URL avoids search result
+                        // ranking differences during the VLC/mpv comparison.
+                        selectedVideo = VideoResult(
+                            title = "Known playback regression — video XaSjdZ2MUkU",
+                            url = "https://www.youtube.com/watch?v=XaSjdZ2MUkU",
+                            channel = "YouTube",
+                            thumbnail = null,
+                            durationSeconds = 0L,
+                            views = -1L
+                        )
+                        engineComparisonMpv = false
+                    }) { Text("Open known playback test video") }
+                    Spacer(Modifier.height(12.dp))
                     val selected = selectedVideo
                     if (selected != null) {
-                        DesktopVideoPlayer(video = selected, onBack = {
-                            selectedVideo = null
-                            section = Section.SEARCH
-                        })
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            OutlinedButton(onClick = {
+                                selectedVideo = null
+                                engineComparisonMpv = false
+                                section = Section.SEARCH
+                            }) { Text("← Search results") }
+                            Button(
+                                enabled = engineComparisonMpv,
+                                onClick = { engineComparisonMpv = false }
+                            ) { Text("VLC baseline") }
+                            Button(
+                                enabled = !engineComparisonMpv,
+                                onClick = { engineComparisonMpv = true }
+                            ) { Text("mpv experiment") }
+                        }
+                        Spacer(Modifier.height(8.dp))
+                        if (engineComparisonMpv) {
+                            DesktopMpvComparisonPlayer(video = selected)
+                        } else {
+                            DesktopVideoPlayer(video = selected, onBack = {
+                                selectedVideo = null
+                                section = Section.SEARCH
+                            })
+                        }
                     } else when (section) {
                         Section.HOME -> HomeWelcome(onQuickSearch = { doSearch(it) })
                         Section.SEARCH -> {
@@ -215,7 +253,10 @@ internal fun DesktopHome(onAbout: () -> Unit) {
                                     Spacer(Modifier.height(14.dp))
                                     LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                                         items(results) { video ->
-                                            VideoRow(video, onPlay = { selectedVideo = video })
+                                            VideoRow(video, onPlay = {
+                                                engineComparisonMpv = false
+                                                selectedVideo = video
+                                            })
                                         }
                                     }
                                 }
