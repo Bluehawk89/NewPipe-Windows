@@ -61,6 +61,30 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
+      - name: Fetch pinned upstream libmpv Windows runtime
+        shell: pwsh
+        run: |
+          # This DLL comes from the original mpv project's own published
+          # Windows build. A changed release asset fails closed: never
+          # package a native binary that fails the pinned checksum.
+          $ErrorActionPreference = 'Stop'
+          $url = 'https://github.com/mpv-player/mpv/releases/download/git-release/libmpv-v0.41.0-dev-g6a262d11f-39135297726-x86_64-w64-mingw32-gpl.zip'
+          $expected = '9d27aea7cdc0bf2c484d5cbf57f546fee0c9618a378dd811f7b3c1ed771515a0'
+          $zip = Join-Path $env:RUNNER_TEMP 'libmpv-pinned.zip'
+          $unpack = Join-Path $env:RUNNER_TEMP 'libmpv-pinned'
+          Invoke-WebRequest -Uri $url -OutFile $zip
+          $sha = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($sha -ne $expected) {
+            throw "libmpv SHA256 mismatch. Refusing to package unverified native code."
+          }
+          Expand-Archive -LiteralPath $zip -DestinationPath $unpack -Force
+          $dll = Get-ChildItem -Path $unpack -File -Recurse -Filter 'libmpv-2.dll' | Select-Object -First 1
+          if (-not $dll) { throw 'Official libmpv ZIP did not contain libmpv-2.dll' }
+          $dest = Join-Path $PWD 'desktopApp/appResources/windows-x64'
+          New-Item -ItemType Directory -Path $dest -Force | Out-Null
+          Copy-Item -LiteralPath $dll.FullName -Destination (Join-Path $dest 'libmpv-2.dll')
+          Write-Host 'Verified upstream mpv DLL staged for native Windows MSI'
+      
       - name: Package desktop application as MSI
         shell: pwsh
         run: .\gradlew.bat :desktopApp:packageMsi --stacktrace --no-configuration-cache
