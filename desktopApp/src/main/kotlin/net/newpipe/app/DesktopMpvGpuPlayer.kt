@@ -29,7 +29,6 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.awt.SwingPanel
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.CancellationException
@@ -38,15 +37,33 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.awt.BorderLayout
+import java.awt.event.ActionEvent
+import java.awt.event.WindowAdapter
+import java.awt.event.WindowEvent
 import java.awt.Toolkit
 import java.awt.datatransfer.StringSelection
+import java.util.concurrent.atomic.AtomicBoolean
+import javax.swing.AbstractAction
+import javax.swing.JButton
+import javax.swing.JComponent
+import javax.swing.JFrame
+import javax.swing.JLabel
+import javax.swing.JPanel
+import javax.swing.KeyStroke
+import javax.swing.SwingUtilities
+import javax.swing.WindowConstants
 
 /**
  * Early integration test ONLY. GPU framebuffer controlled by our GL canvas,
  * but hosted via SwingPanel until texture compositing into Compose is proven.
  */
 @Composable
-internal fun DesktopMpvGpuPlayer(video: VideoResult, onFatalError: (String) -> Unit) {
+internal fun DesktopMpvGpuPlayer(
+    video: VideoResult,
+    onFatalError: (String) -> Unit,
+    onClose: () -> Unit
+) {
     var options by remember(video.url) { mutableStateOf<List<PlaybackOption>>(emptyList()) }
     var selected by remember(video.url) { mutableIntStateOf(0) }
     var error by remember(video.url) { mutableStateOf<String?>(null) }
@@ -77,13 +94,21 @@ internal fun DesktopMpvGpuPlayer(video: VideoResult, onFatalError: (String) -> U
     val scope = rememberCoroutineScope()
     val current = options.getOrNull(selected)
 
-    DisposableEffect(canvas) {
+    // AWTGLCanvas owns a heavyweight peer and should not be layered over
+    // Compose navigation controls. Host the laboratory in an explicitly
+    // closeable, NON-MODAL JFrame, keeping the main mpv/navigation UI usable.
+    // This is temporary until true Skia texture interop is implemented.
+    val host = remember(canvas) {
+        GpuLabWindowHandle(canvas) {
+            scope.launch { onClose() }
+        }
+    }
+    DisposableEffect(host) {
+        host.show()
         onDispose {
-            // Hide / change search immediately; don't keep ghost audio while
-            // the GL canvas's disposeGL() finishes releasing native resources.
-            Thread({
-                bridge.stop()
-            }, "mpv-gpu-stop").apply { isDaemon = true; start() }
+            // First stop mpv off the UI thread, then dispose the native
+            // OpenGL peer on the Swing EDT. Avoid blocking navigation.
+            host.closeAsync(bridge)
         }
     }
 
@@ -157,8 +182,21 @@ internal fun DesktopMpvGpuPlayer(video: VideoResult, onFatalError: (String) -> U
             color = Color(0xFFADB4C4)
         )
         Spacer(Modifier.height(8.dp))
-        Box(Modifier.fillMaxWidth().weight(1f).background(Color.Black)) {
-            SwingPanel(factory = { canvas }, modifier = Modifier.fillMaxSize())
+        Box(Modifier.fillMaxWidth().weight(1f).background(Color(0xFF171B25)),
+            contentAlignment = Alignment.Center
+        ) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Text("GPU lab is open in a separate Windows test window.")
+                Text(
+                    "Close it with ×, Escape, or Return to mpv. " +
+                        "The main application remains available.",
+                    color = Color(0xFFADB4C4)
+                )
+                Spacer(Modifier.height(12.dp))
+                OutlinedButton(onClick = onClose) {
+                    Text("Close GPU lab / Return to mpv")
+                }
+            }
         }
         Spacer(Modifier.height(8.dp))
         Column(
@@ -213,6 +251,77 @@ internal fun DesktopMpvGpuPlayer(video: VideoResult, onFatalError: (String) -> U
                 }) { Text(if (copied) "Copied" else "Copy GPU report") }
             }
             Spacer(Modifier.width(2.dp))
+        }
+    }
+}
+
+
+/**
+ * Dedicated non-modal GPU test window with predictable ownership and three
+ * separate exit routes: native titlebar X, Escape, and visible Close button.
+ *
+ * The original AWTGLCanvas embedded in Compose could appear as an unmanaged
+ * floating native surface and block navigation. A real JFrame owns the canvas
+ * instead, while the normal Compose window stays accessible.
+ */
+private class GpuLabWindowHandle(
+    private val canvas: MpvGpuCanvas,
+    private val requestClose: () -> Unit
+) {
+    private val closing = AtomicBoolean(false)
+    @Volatile private var window: JFrame? = null
+
+    fun show() {
+        SwingUtilities.invokeLater {
+            if (closing.get()) return@invokeLater
+            val frame = JFrame("GPU lab (alpha) — NewPipe Windows")
+            frame.defaultCloseOperation = WindowConstants.DO_NOTHING_ON_CLOSE
+            frame.layout = BorderLayout()
+            val controls = JPanel(BorderLayout())
+            controls.add(JLabel(" OpenGL video laboratory — experimental "), BorderLayout.CENTER)
+            val closeButton = JButton("Close GPU lab / Return to mpv")
+            closeButton.addActionListener { requestCloseIfOpen() }
+            controls.add(closeButton, BorderLayout.EAST)
+            frame.add(controls, BorderLayout.NORTH)
+            frame.add(canvas, BorderLayout.CENTER)
+            frame.addWindowListener(object : WindowAdapter() {
+                override fun windowClosing(event: WindowEvent) {
+                    requestCloseIfOpen()
+                }
+            })
+            frame.rootPane.getInputMap(JComponent.WHEN_IN_FOCUSED_WINDOW).put(
+                KeyStroke.getKeyStroke("ESCAPE"), "gpu-lab-close"
+            )
+            frame.rootPane.actionMap.put("gpu-lab-close", object : AbstractAction() {
+                override fun actionPerformed(event: ActionEvent) {
+                    requestCloseIfOpen()
+                }
+            })
+            frame.setSize(1000, 640)
+            frame.setLocationRelativeTo(null)
+            window = frame
+            frame.isVisible = true
+        }
+    }
+
+    private fun requestCloseIfOpen() {
+        if (!closing.get()) requestClose()
+    }
+
+    fun closeAsync(bridge: MpvGlRenderBridge) {
+        if (!closing.compareAndSet(false, true)) return
+        Thread({
+            runCatching { bridge.stop() }
+            SwingUtilities.invokeLater {
+                // JFrame.dispose() triggers the AWTGLCanvas's native
+                // removeNotify / disposeGL path. Never invoke it on the
+                // Compose render worker or while holding bridge locks.
+                window?.dispose()
+                window = null
+            }
+        }, "gpu-lab-stop-dispose").apply {
+            isDaemon = true
+            start()
         }
     }
 }
