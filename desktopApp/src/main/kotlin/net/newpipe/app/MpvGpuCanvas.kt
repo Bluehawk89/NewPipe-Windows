@@ -21,21 +21,39 @@ import java.util.concurrent.atomic.AtomicBoolean
  */
 internal class MpvGpuCanvas(
     private val bridge: MpvGlRenderBridge,
-    private val onReady: () -> Unit
+    private val onReady: () -> Unit,
+    private val onFailure: (String) -> Unit
 ) : AWTGLCanvas(GLData().apply {
     majorVersion = 3
     minorVersion = 2
     profile = GLData.Profile.CORE
 }) {
     private val queued = AtomicBoolean(false)
+    private val failureDelivered = AtomicBoolean(false)
     @Volatile private var finished = false
+
+    private fun failSafely(stage: String, failure: Throwable) {
+        if (!failureDelivered.compareAndSet(false, true)) return
+        finished = true
+        // Never include native exception messages: these may contain
+        // sensitive host paths. Failure is reported on the AWT event thread
+        // and the Compose parent restores the working mpv renderer.
+        EventQueue.invokeLater {
+            onFailure("GPU " + stage + " failed (" +
+                failure.javaClass.simpleName + ").")
+        }
+    }
 
     fun requestGpuFrame() {
         if (finished || !queued.compareAndSet(false, true)) return
         EventQueue.invokeLater {
             queued.set(false)
             if (!finished && isDisplayable && isShowing) {
-                runCatching { render() }
+                try {
+                    render()
+                } catch (failure: Throwable) {
+                    failSafely("render", failure)
+                }
             }
         }
     }
@@ -45,10 +63,19 @@ internal class MpvGpuCanvas(
     }
 
     override fun initGL() {
-        GL.createCapabilities()
-        bridge.createOnGlThread { requestGpuFrame() }
-        if (bridge.ready) {
-            EventQueue.invokeLater { if (!finished) onReady() }
+        try {
+            GL.createCapabilities()
+            bridge.createOnGlThread { requestGpuFrame() }
+            if (bridge.ready) {
+                EventQueue.invokeLater { if (!finished) onReady() }
+            } else {
+                failSafely(
+                    "initialization",
+                    IllegalStateException("libmpv OpenGL context unavailable")
+                )
+            }
+        } catch (failure: Throwable) {
+            failSafely("initialization", failure)
         }
     }
 
@@ -71,7 +98,8 @@ internal class MpvGpuCanvas(
         // This callback is invoked with OUR GL context current. Do not call
         // Swing invokeAndWait or wait for a native-media worker while holding
         // the native canvas lifecycle lock.
-        bridge.releaseRendererOnGlThread()
+        runCatching { bridge.releaseRendererOnGlThread() }
+            .onFailure { failSafely("release", it) }
         Thread({
             bridge.destroyCoreAfterRenderer()
         }, "mpv-gpu-core-destroy").apply {
