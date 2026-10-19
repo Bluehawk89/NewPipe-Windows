@@ -120,7 +120,10 @@ internal fun DesktopVideoPlayer(video: VideoResult, onBack: () -> Unit) {
             else -> {
                 val selectedIndex = optionIndex.coerceIn(0, candidateList.lastIndex)
                 val candidate = candidateList[selectedIndex]
-                val player = remember(candidate.url, retryNumber) {
+                // Retain one native player for this video. Recreating/releasing
+                // VLC and Swing components on every failed stream can race the
+                // next attempt and produce IllegalStateException.
+                val player = remember(video.url) {
                     runCatching { EmbeddedMediaPlayerComponent() }.getOrNull()
                 }
 
@@ -147,7 +150,9 @@ internal fun DesktopVideoPlayer(video: VideoResult, onBack: () -> Unit) {
                         }
                     }
 
-                    LaunchedEffect(player, candidate.url) {
+                    // Retrying the same candidate should also restart playback.
+                    // The native player remains alive between candidates.
+                    LaunchedEffect(player, candidate.url, retryNumber) {
                         status = "Connecting to " + candidate.label + " (" +
                             (selectedIndex + 1).toString() + "/" + candidateList.size.toString() + ")"
                         playbackIssue = null
@@ -159,6 +164,9 @@ internal fun DesktopVideoPlayer(video: VideoResult, onBack: () -> Unit) {
 
                         try {
                             val accepted = withContext(Dispatchers.IO) {
+                                // vlcj needs to finish the prior attempt before
+                                // switching an existing native player to a new media.
+                                player.mediaPlayer().controls().stop()
                                 // Direct media hosts may treat LibVLC's default HTTP
                                 // User-Agent differently from NewPipe Extractor's.
                                 player.mediaPlayer().media().play(
@@ -230,7 +238,9 @@ internal fun DesktopVideoPlayer(video: VideoResult, onBack: () -> Unit) {
                         } catch (e: CancellationException) {
                             throw e
                         } catch (e: Exception) {
-                            val shortReason = "Playback raised " + e.javaClass.simpleName
+                            // Exception.message may include signed stream URLs:
+                            // report only exception types and code locations.
+                            val shortReason = safePlaybackException(e)
                             attemptNotes = attemptNotes + (
                                 (selectedIndex + 1).toString() + "/" + candidateList.size +
                                 " " + candidate.label + ": " + shortReason
@@ -250,7 +260,7 @@ internal fun DesktopVideoPlayer(video: VideoResult, onBack: () -> Unit) {
                         }
                     }
 
-                    LaunchedEffect(player) {
+                    LaunchedEffect(player, candidate.url) {
                         while (isActive) {
                             delay(500)
                             runCatching {
@@ -443,6 +453,24 @@ private fun buildDiagnostics(
     attempts: List<String>,
     mediaProbe: String
 ): String = (
-    listOf("Unofficial Windows M2.3 playback diagnostic", "Video: " + videoUrl) +
+    listOf("Unofficial Windows M2.4 playback diagnostic", "Video: " + videoUrl) +
         attempts + mediaProbe
 ).joinToString("\n")
+
+/**
+ * No exception message or stack trace is emitted. Media URLs can carry
+ * temporary signatures; only class/method/line and exception type are safe
+ * to include in a diagnostic copied from a public test build.
+ */
+private fun safePlaybackException(error: Exception): String {
+    val cause = generateSequence(error as Throwable) { it.cause }.take(4).last()
+    val frame = cause.stackTrace.firstOrNull {
+        it.className.startsWith("uk.co.caprica.vlcj") ||
+            it.className.startsWith("net.newpipe.app")
+    } ?: cause.stackTrace.firstOrNull()
+    val location = frame?.let {
+        it.className.substringAfterLast('.') + "." + it.methodName + ":" + it.lineNumber
+    } ?: "unknown"
+    return "Playback raised " + error.javaClass.simpleName +
+        " (root: " + cause.javaClass.simpleName + ", at " + location + ")"
+}
