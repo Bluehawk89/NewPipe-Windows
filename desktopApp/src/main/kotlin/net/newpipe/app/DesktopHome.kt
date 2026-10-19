@@ -85,6 +85,9 @@ internal fun DesktopHome(onAbout: () -> Unit) {
     // Only the user-verified mpv is offered for normal watching.
     // VLC remains preserved in Git history for engineering comparisons.
     var gpuRendererExperiment by remember { mutableStateOf(false) }
+    // Only resume the current video after a confirmed GPU-to-mpv handoff.
+    var resumeInMpv by remember { mutableStateOf<Double?>(null) }
+    var gpuExitRequest by remember { mutableIntStateOf(0) }
     var gpuCheckPending by remember { mutableStateOf(false) }
     var gpuWarning by remember { mutableStateOf<String?>(null) }
     var searchGeneration by remember { mutableIntStateOf(0) }
@@ -99,6 +102,8 @@ internal fun DesktopHome(onAbout: () -> Unit) {
         // search results obscured behind a still-playing media surface.
         selectedVideo = null
         gpuRendererExperiment = false
+        resumeInMpv = null
+        gpuExitRequest = 0
         gpuWarning = null
         query = clean
         searchedTerm = clean
@@ -162,6 +167,8 @@ internal fun DesktopHome(onAbout: () -> Unit) {
                             onClick = {
                                 selectedVideo = null
                                 gpuRendererExperiment = false
+                                resumeInMpv = null
+                                gpuExitRequest = 0
                                 gpuWarning = null
                                 section = entry
                             }
@@ -199,6 +206,8 @@ internal fun DesktopHome(onAbout: () -> Unit) {
                     OutlinedButton(onClick = {
                         // A fixed known regression URL avoids search result
                         // ranking differences during the VLC/mpv comparison.
+                        resumeInMpv = null
+                        gpuExitRequest = 0
                         selectedVideo = VideoResult(
                             title = "Known playback regression — video XaSjdZ2MUkU",
                             url = "https://www.youtube.com/watch?v=XaSjdZ2MUkU",
@@ -219,14 +228,17 @@ internal fun DesktopHome(onAbout: () -> Unit) {
                             OutlinedButton(onClick = {
                                 selectedVideo = null
                                 gpuRendererExperiment = false
+                                resumeInMpv = null
+                                gpuExitRequest = 0
                                 gpuWarning = null
                                 section = Section.SEARCH
                             }) { Text("← Search results") }
                             Button(
                                 enabled = gpuRendererExperiment,
                                 onClick = {
-                                    gpuRendererExperiment = false
-                                    gpuWarning = null
+                                    // Use the same guarded GPU exit path as X,
+                                    // Escape and the in-window Return button.
+                                    gpuExitRequest += 1
                                 }
                             ) { Text("mpv player") }
                             OutlinedButton(
@@ -245,6 +257,8 @@ internal fun DesktopHome(onAbout: () -> Unit) {
                                         gpuCheckPending = false
                                         if (selectedVideo?.url != selected.url) return@launch
                                         if (failure == null) {
+                                            resumeInMpv = null
+                                            gpuExitRequest = 0
                                             gpuRendererExperiment = true
                                         } else {
                                             gpuRendererExperiment = false
@@ -266,18 +280,25 @@ internal fun DesktopHome(onAbout: () -> Unit) {
                             DesktopMpvGpuPlayer(
                                 video = selected,
                                 onFatalError = { safeMessage ->
+                                    resumeInMpv = null
                                     gpuWarning = safeMessage
                                     gpuRendererExperiment = false
                                 },
-                                onClose = {
-                                    // Native X, Escape, or visible GPU exit
-                                    // always return to the known mpv player.
+                                onClose = { gpuSeconds ->
+                                    // GPU audio has already stopped before mpv
+                                    // mounts. Resume only a valid position.
+                                    resumeInMpv = MpvPlaybackHandoff.position(gpuSeconds)
+                                    gpuExitRequest = 0
                                     gpuRendererExperiment = false
                                     gpuWarning = null
-                                }
+                                },
+                                returnToMpvRequest = gpuExitRequest
                             )
                         } else {
-                            DesktopMpvComparisonPlayer(video = selected)
+                            DesktopMpvComparisonPlayer(
+                                video = selected,
+                                resumeSeconds = resumeInMpv
+                            )
                         }
                     } else when (section) {
                         Section.HOME -> HomeWelcome(onQuickSearch = { doSearch(it) })
@@ -317,7 +338,9 @@ internal fun DesktopHome(onAbout: () -> Unit) {
                                     LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                                         items(results) { video ->
                                             VideoRow(video, onPlay = {
-                                                                                        gpuRendererExperiment = false
+                                                gpuRendererExperiment = false
+                                                resumeInMpv = null
+                                                gpuExitRequest = 0
                                                 selectedVideo = video
                                             })
                                         }

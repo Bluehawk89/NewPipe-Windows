@@ -51,7 +51,10 @@ import java.awt.datatransfer.StringSelection
  * mpv is embedded through an AWT HWND; its GPU render API remains the target.
  */
 @Composable
-internal fun DesktopMpvComparisonPlayer(video: VideoResult) {
+internal fun DesktopMpvComparisonPlayer(
+    video: VideoResult,
+    resumeSeconds: Double? = null
+) {
     var candidates by remember(video.url) { mutableStateOf<List<PlaybackOption>>(emptyList()) }
     var selectedIndex by remember(video.url) { mutableIntStateOf(0) }
     val source = candidates.getOrNull(selectedIndex)
@@ -123,7 +126,7 @@ internal fun DesktopMpvComparisonPlayer(video: VideoResult) {
         error = withContext(Dispatchers.IO) {
             // Switching formats must not dispose the embedded player or
             // recreate its native HWND. Keep one mpv session per viewport.
-            controller.openOrSwitch(surface, candidate)
+            controller.openOrSwitch(surface, candidate, resumeSeconds)
         }
         if (error != null && selectedIndex < candidates.lastIndex) {
             // Immediate native rejection: try another source once rather than

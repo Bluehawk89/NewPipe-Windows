@@ -57,6 +57,7 @@ internal class MpvNativeController {
     private var fileLoaded = false
     private var audioRecoveryAttempted = false
     private var expectedMediaPath: String? = null
+    private var pendingResumeSeconds: Double? = null
 
     @Synchronized
     fun open(surface: Canvas, source: PlaybackOption): String? {
@@ -150,8 +151,18 @@ internal class MpvNativeController {
     }
 
     @Synchronized
-    fun openOrSwitch(surface: Canvas, source: PlaybackOption): String? =
-        if (instance == null) open(surface, source) else switchSource(source)
+    fun openOrSwitch(
+        surface: Canvas,
+        source: PlaybackOption,
+        resumeSeconds: Double? = null
+    ): String? {
+        val result = if (instance == null) open(surface, source) else switchSource(source)
+        // Arm a seek only for this newly opened stream. A stale FILE_LOADED
+        // event must never apply the prior video's position to a new source.
+        pendingResumeSeconds = if (result == null)
+            MpvPlaybackHandoff.position(resumeSeconds) else null
+        return result
+    }
 
     @Synchronized
     fun snapshot(): MpvReading? {
@@ -190,6 +201,14 @@ internal class MpvNativeController {
                 val rc = l.mpv_command(ctx, arrayOf("audio-add", audioUri, "select"))
                 audioAttachmentStatus = if (rc >= 0) "audio-add accepted; awaiting decoder"
                     else "audio-add rejected (mpv code " + rc + ")"
+            }
+            // Seek only after the correct FILE_LOADED event, never when
+            // loadfile merely acknowledges an input URL. This is best-effort:
+            // live streams and some HLS renditions may reject seeking.
+            if (fileLoaded && pendingResumeSeconds != null) {
+                val seek = MpvPlaybackHandoff.seekCommand(pendingResumeSeconds)
+                pendingResumeSeconds = null
+                if (seek != null) runCatching { l.mpv_command(ctx, seek) }
             }
             val count = (prop("track-list/count")?.toIntOrNull() ?: 0).coerceIn(0, 48)
             val countAudio = (0 until count).count { prop("track-list/" + it + "/type") == "audio" }
@@ -254,6 +273,7 @@ internal class MpvNativeController {
         native = null
         pendingAudioUrl = null
         expectedMediaPath = null
+        pendingResumeSeconds = null
         audioAttachmentStatus = "not required"
         fileLoaded = false
         audioRecoveryAttempted = false

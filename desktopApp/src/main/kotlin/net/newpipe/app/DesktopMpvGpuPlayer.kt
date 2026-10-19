@@ -62,7 +62,8 @@ import javax.swing.WindowConstants
 internal fun DesktopMpvGpuPlayer(
     video: VideoResult,
     onFatalError: (String) -> Unit,
-    onClose: () -> Unit
+    onClose: (Double?) -> Unit,
+    returnToMpvRequest: Int = 0
 ) {
     var options by remember(video.url) { mutableStateOf<List<PlaybackOption>>(emptyList()) }
     var selected by remember(video.url) { mutableIntStateOf(0) }
@@ -94,14 +95,37 @@ internal fun DesktopMpvGpuPlayer(
     val scope = rememberCoroutineScope()
     val current = options.getOrNull(selected)
 
+    // Capture the current GPU timestamp and silence the native core before
+    // changing Compose to the mpv HWND player. This avoids double audio while
+    // the AWTGLCanvas is asynchronously disposing its OpenGL context.
+    // All exit routes share one guard: X, Escape, window button, Compose button,
+    // and the main application's mpv-player toggle.
+    val exitRequested = remember(canvas) { AtomicBoolean(false) }
+    val requestExit: () -> Unit = remember(canvas) {
+        {
+            if (exitRequested.compareAndSet(false, true)) {
+                scope.launch {
+                    val resumeSeconds = withContext(Dispatchers.IO) {
+                        val elapsed = runCatching {
+                            bridge.poll()?.elapsed?.toDoubleOrNull()
+                        }.getOrNull()
+                        runCatching { bridge.pause(true) }
+                        runCatching { bridge.stop() }
+                        MpvPlaybackHandoff.position(elapsed)
+                    }
+                    onClose(resumeSeconds)
+                }
+            }
+        }
+    }
+
     // AWTGLCanvas owns a heavyweight peer and should not be layered over
     // Compose navigation controls. Host the laboratory in an explicitly
     // closeable, NON-MODAL JFrame, keeping the main mpv/navigation UI usable.
     // This is temporary until true Skia texture interop is implemented.
-    val host = remember(canvas) {
-        GpuLabWindowHandle(canvas) {
-            scope.launch { onClose() }
-        }
+    val host = remember(canvas) { GpuLabWindowHandle(canvas, requestExit) }
+    LaunchedEffect(returnToMpvRequest) {
+        if (returnToMpvRequest > 0) requestExit()
     }
     DisposableEffect(host) {
         host.show()
@@ -193,7 +217,7 @@ internal fun DesktopMpvGpuPlayer(
                     color = Color(0xFFADB4C4)
                 )
                 Spacer(Modifier.height(12.dp))
-                OutlinedButton(onClick = onClose) {
+                OutlinedButton(onClick = requestExit) {
                     Text("Close GPU lab / Return to mpv")
                 }
             }
