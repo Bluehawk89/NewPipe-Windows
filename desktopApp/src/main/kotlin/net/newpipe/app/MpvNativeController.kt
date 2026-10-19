@@ -173,7 +173,11 @@ internal class MpvNativeController {
                     // A previous input might emit a late FILE_LOADED event
                     // after the switch; check the private path but never log
                     // the temporary signed media URL.
-                    fileLoaded = prop("path") == expectedMediaPath
+                    fileLoaded = MpvMediaEventGuard.matchesLoadedMedia(
+                        eventId = eventId,
+                        observedMediaPath = prop("path"),
+                        requestedMediaPath = expectedMediaPath
+                    )
                 }
             }
             // Only MPV_EVENT_FILE_LOADED proves the *new* source has loaded.
