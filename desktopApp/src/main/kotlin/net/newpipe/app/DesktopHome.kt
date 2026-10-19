@@ -172,7 +172,21 @@ internal fun DesktopHome(onAbout: () -> Unit) {
                             Text("Search")
                         }
                     }
-                    Spacer(Modifier.height(28.dp))
+                    Spacer(Modifier.height(8.dp))
+                    OutlinedButton(onClick = {
+                        // A fixed known regression URL avoids search result
+                        // ranking differences during the VLC/mpv comparison.
+                        selectedVideo = VideoResult(
+                            title = "Known playback regression — video XaSjdZ2MUkU",
+                            url = "https://www.youtube.com/watch?v=XaSjdZ2MUkU",
+                            channel = "YouTube",
+                            thumbnail = null,
+                            durationSeconds = 0L,
+                            views = -1L
+                        )
+                        engineComparisonMpv = false
+                    }) { Text("Open known playback test video") }
+                    Spacer(Modifier.height(12.dp))
                     val selected = selectedVideo
                     if (selected != null) {
                         Row(
