@@ -56,6 +56,7 @@ internal class MpvNativeController {
     private var audioAttachmentStatus = "not required"
     private var fileLoaded = false
     private var audioRecoveryAttempted = false
+    private var expectedMediaPath: String? = null
 
     @Synchronized
     fun open(surface: Canvas, source: PlaybackOption): String? {
@@ -97,6 +98,7 @@ internal class MpvNativeController {
             // Add the separate HLS audio rendition using audio-add SELECT
             // *after* MPV_EVENT_FILE_LOADED, and verify its selected track.
             pendingAudioUrl = source.audioUrl
+            expectedMediaPath = source.url
             audioAttachmentStatus = if (source.audioUrl == null) "not required" else "waiting for media load"
             fileLoaded = false
             audioRecoveryAttempted = false
@@ -111,6 +113,7 @@ internal class MpvNativeController {
             native = null
             instance = null
             pendingAudioUrl = null
+            expectedMediaPath = null
             return if (error is IllegalStateException)
                 "mpv setup failed: " + error.message.orEmpty().take(110)
             else "mpv setup failed (" + error.javaClass.simpleName + ")"
@@ -128,11 +131,12 @@ internal class MpvNativeController {
         val ctx = instance ?: return "mpv is not initialized"
         // Clear queued FILE_LOADED notifications from the previous source.
         // A stale event could attach the next video's audio to old media.
-        repeat(256) {
-            val event = l.mpv_wait_event(ctx, 0.0) ?: return@repeat
-            if (event.getInt(0) == 0) return@repeat
+        for (attempt in 0 until 256) {
+            val event = l.mpv_wait_event(ctx, 0.0) ?: break
+            if (event.getInt(0) == 0) break
         }
         pendingAudioUrl = source.audioUrl
+        expectedMediaPath = source.url
         audioAttachmentStatus = if (source.audioUrl == null)
             "not required" else "waiting for media load"
         fileLoaded = false
@@ -157,11 +161,16 @@ internal class MpvNativeController {
             // mpv requires consumers to drain its event queue. FILE_LOADED
             // is the correct point to load audio tracks belonging to this
             // stream rather than setting a global startup option.
-            repeat(32) {
-                val event = l.mpv_wait_event(ctx, 0.0) ?: return@repeat
+            for (attempt in 0 until 32) {
+                val event = l.mpv_wait_event(ctx, 0.0) ?: break
                 val eventId = event.getInt(0)
-                if (eventId == 0) return@repeat
-                if (eventId == 8) fileLoaded = true
+                if (eventId == 0) break
+                if (eventId == 8) {
+                    // A previous input might emit a late FILE_LOADED event
+                    // after the switch; check the private path but never log
+                    // the temporary signed media URL.
+                    fileLoaded = prop("path") == expectedMediaPath
+                }
             }
             // Only MPV_EVENT_FILE_LOADED proves the *new* source has loaded.
             // The prior decoder can keep video-params/w populated briefly
@@ -236,6 +245,7 @@ internal class MpvNativeController {
         instance = null
         native = null
         pendingAudioUrl = null
+        expectedMediaPath = null
         audioAttachmentStatus = "not required"
         fileLoaded = false
         audioRecoveryAttempted = false
