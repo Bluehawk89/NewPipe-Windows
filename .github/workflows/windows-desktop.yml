@@ -34,7 +34,7 @@ jobs:
           distribution: temurin
           java-version: '21'
 
-      - name: Install Android API 37 using the runner's preinstalled SDK
+      - name: Install Android API 37.0 using the runner's preinstalled SDK
         shell: pwsh
         run: |
           $sdkRoot = $env:ANDROID_HOME
@@ -42,7 +42,7 @@ jobs:
           $sdkManager = Get-ChildItem -Path (Join-Path $sdkRoot 'cmdline-tools') -Recurse -File -Filter 'sdkmanager.bat' |
             Select-Object -First 1 -ExpandProperty FullName
           if (-not $sdkManager) { throw "Android sdkmanager.bat not found" }
-          & $sdkManager "--sdk_root=$sdkRoot" "platforms;android-37"
+          & $sdkManager "--sdk_root=$sdkRoot" "--channel=3" "platforms;android-37.0"
           if ($LASTEXITCODE -ne 0) { throw "Android SDK installation failed" }
 
       - name: Configure Gradle
