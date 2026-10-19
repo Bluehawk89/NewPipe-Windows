@@ -200,6 +200,10 @@ internal class MpvGlRenderBridge {
         val a = api ?: return false
         val r = renderContext ?: return false
         if (width <= 0 || height <= 0 || disposed) return false
+        // Required by mpv's update callback contract. The update flags
+        // acknowledge newly decoded frames and redraw requests. Still render
+        // on resize even when no new frame has arrived.
+        a.mpv_render_context_update(r)
         val fbo = Memory(16L)
         fbo.setInt(0L, 0) // Default framebuffer owned by AWTGLCanvas
         fbo.setInt(4L, width)
