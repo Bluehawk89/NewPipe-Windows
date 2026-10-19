@@ -193,6 +193,13 @@ internal fun DesktopVideoPlayer(video: VideoResult, onBack: () -> Unit) {
                                         reason = "VLC reported a playback error."
                                         break
                                     }
+                                    // STOPPED for 8 seconds means VLC abandoned startup.
+                                    // Retry another candidate without waiting for a full
+                                    // 20-second watchdog on every manifest variant.
+                                    if (tick >= 15 && current.equals("STOPPED", ignoreCase = true)) {
+                                        reason = "VLC stopped without starting playback."
+                                        break
+                                    }
                                 }
                                 if (!started && reason == null) {
                                     reason = "No playback detected after 20 seconds."
@@ -348,10 +355,10 @@ private fun inspectMediaEndpoint(url: String): String {
     val connection = try {
         (URL(url).openConnection() as HttpURLConnection).apply {
             requestMethod = "GET"
-            connectTimeout = 12000
-            readTimeout = 10000
+            connectTimeout = 10000
+            readTimeout = 8000
             instanceFollowRedirects = true
-            setRequestProperty("Range", "bytes=0-0")
+            setRequestProperty("Range", "bytes=0-65535")
             setRequestProperty(
                 "User-Agent",
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36"
@@ -364,11 +371,70 @@ private fun inspectMediaEndpoint(url: String): String {
     return try {
         val code = connection.responseCode
         val mime = connection.contentType?.substringBefore(';')?.take(40) ?: "unknown"
-        "Media HTTP status: " + code + ", content type: " + mime
+        val headline = "Media HTTP status: " + code + ", content type: " + mime
+        if (code !in 200..299 ||
+            (!mime.contains("mpegurl", ignoreCase = true) && !mime.contains("m3u", ignoreCase = true))
+        ) {
+            headline
+        } else {
+            val text = connection.inputStream.use {
+                String(it.readNBytes(65536), Charsets.UTF_8)
+            }
+            val lines = text.lineSequence().map { it.trim() }.take(1200).toList()
+            val masterCount = lines.count { it.startsWith("#EXT-X-STREAM-INF:") }
+            val segmentCount = lines.count { it.startsWith("#EXTINF:") }
+            val valid = lines.firstOrNull()?.startsWith("#EXTM3U") == true
+            val kind = when {
+                !valid -> "invalid/unrecognized playlist"
+                masterCount > 0 -> "master playlist, " + masterCount + " variants"
+                segmentCount > 0 -> "media playlist, " + segmentCount + " listed segments"
+                else -> "playlist, no video variants/segments identified"
+            }
+            val firstChild = if (valid) {
+                lines.firstOrNull { it.isNotBlank() && !it.startsWith("#") }
+            } else null
+            val childProbe = if (firstChild != null) {
+                runCatching {
+                    val subUri = connection.url.toURI().resolve(firstChild)
+                    val host = subUri.host?.lowercase().orEmpty()
+                    if (subUri.scheme != "https" ||
+                        !(host == "googlevideo.com" || host.endsWith(".googlevideo.com") ||
+                            host == "youtube.com" || host.endsWith(".youtube.com"))
+                    ) {
+                        "Playlist child check skipped (unexpected domain)"
+                    } else {
+                        inspectPlaylistChild(subUri.toURL())
+                    }
+                }.getOrElse { "Playlist child check failed: " + it.javaClass.simpleName }
+            } else "No playlist child URL found"
+            headline + "\nHLS structure: " + kind + "\n" + childProbe
+        }
     } catch (e: Exception) {
         "Media HTTP check failed: " + e.javaClass.simpleName
     } finally {
         connection.disconnect()
+    }
+}
+
+private fun inspectPlaylistChild(url: URL): String {
+    val conn = url.openConnection() as HttpURLConnection
+    return try {
+        conn.requestMethod = "GET"
+        conn.connectTimeout = 8000
+        conn.readTimeout = 7000
+        conn.instanceFollowRedirects = true
+        conn.setRequestProperty("Range", "bytes=0-0")
+        conn.setRequestProperty(
+            "User-Agent",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36"
+        )
+        conn.setRequestProperty("Referer", "https://www.youtube.com/")
+        "First HLS child HTTP status: " + conn.responseCode +
+            ", content type: " + (conn.contentType?.substringBefore(';')?.take(40) ?: "unknown")
+    } catch (e: Exception) {
+        "First HLS child check failed: " + e.javaClass.simpleName
+    } finally {
+        conn.disconnect()
     }
 }
 
@@ -377,6 +443,6 @@ private fun buildDiagnostics(
     attempts: List<String>,
     mediaProbe: String
 ): String = (
-    listOf("Unofficial Windows M2.2 playback diagnostic", "Video: " + videoUrl) +
+    listOf("Unofficial Windows M2.3 playback diagnostic", "Video: " + videoUrl) +
         attempts + mediaProbe
 ).joinToString("\n")
