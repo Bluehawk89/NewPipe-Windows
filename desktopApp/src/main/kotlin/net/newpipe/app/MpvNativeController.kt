@@ -117,6 +117,34 @@ internal class MpvNativeController {
         }
     }
 
+    /**
+     * Switch media on the existing libmpv instance. Do NOT destroy the native
+     * player or reparent the video window merely to try another quality.
+     * Native player lifecycle should follow the viewport, not the stream URL.
+     */
+    @Synchronized
+    fun switchSource(source: PlaybackOption): String? {
+        val l = native ?: return "mpv is not initialized"
+        val ctx = instance ?: return "mpv is not initialized"
+        // Clear queued FILE_LOADED notifications from the previous source.
+        // A stale event could attach the next video's audio to old media.
+        repeat(256) {
+            val event = l.mpv_wait_event(ctx, 0.0) ?: return@repeat
+            if (event.getInt(0) == 0) return@repeat
+        }
+        pendingAudioUrl = source.audioUrl
+        audioAttachmentStatus = if (source.audioUrl == null)
+            "not required" else "waiting for media load"
+        fileLoaded = false
+        audioRecoveryAttempted = false
+        val rc = runCatching {
+            l.mpv_command(ctx, arrayOf("loadfile", source.url, "replace"))
+        }.getOrElse {
+            return "mpv could not switch format (" + it.javaClass.simpleName + ")"
+        }
+        return if (rc >= 0) null else "mpv rejected format switch (code " + rc + ")"
+    }
+
     @Synchronized
     fun snapshot(): MpvReading? {
         val l = native ?: return null
@@ -135,10 +163,10 @@ internal class MpvNativeController {
                 if (eventId == 0) return@repeat
                 if (eventId == 8) fileLoaded = true
             }
+            // Only MPV_EVENT_FILE_LOADED proves the *new* source has loaded.
+            // The prior decoder can keep video-params/w populated briefly
+            // after switching files, so width must not trigger audio-add.
             val videoWidth = prop("video-params/w") ?: "?"
-            if (videoWidth.toIntOrNull()?.let { it > 0 } == true) {
-                fileLoaded = true
-            }
             if (fileLoaded && pendingAudioUrl != null) {
                 val audioUri = pendingAudioUrl!!
                 pendingAudioUrl = null
