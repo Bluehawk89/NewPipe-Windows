@@ -16,8 +16,15 @@ dependencies {
     implementation(projects.shared)
 
     implementation(compose.desktop.currentOs)
+    implementation(compose.material3)
     implementation(libs.jetbrains.coroutines.swing)
     implementation(libs.jetbrains.compose.preview)
+
+    // Extractor-backed desktop search and thumbnail loading (no Android runtime).
+    implementation(libs.newpipe.extractor)
+    implementation(libs.squareup.okhttp)
+    implementation(libs.coil.compose)
+    implementation(libs.coil.network.okhttp)
 }
 
 compose.desktop {
