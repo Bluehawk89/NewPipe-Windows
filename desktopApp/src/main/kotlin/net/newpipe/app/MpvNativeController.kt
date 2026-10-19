@@ -6,7 +6,6 @@ package net.newpipe.app
 
 import com.sun.jna.Library
 import com.sun.jna.Native
-import com.sun.jna.NativeLibrary
 import com.sun.jna.Pointer
 import java.awt.Canvas
 import java.io.File
@@ -56,6 +55,7 @@ internal class MpvNativeController {
     private var pendingAudioUrl: String? = null
     private var audioAttachmentStatus = "not required"
     private var fileLoaded = false
+    private var audioRecoveryAttempted = false
 
     @Synchronized
     fun open(surface: Canvas, source: PlaybackOption): String? {
@@ -99,6 +99,7 @@ internal class MpvNativeController {
             pendingAudioUrl = source.audioUrl
             audioAttachmentStatus = if (source.audioUrl == null) "not required" else "waiting for media load"
             fileLoaded = false
+            audioRecoveryAttempted = false
             if (library.mpv_initialize(ctx) < 0) error("mpv initialization")
             instance = ctx
             native = library
@@ -148,6 +149,16 @@ internal class MpvNativeController {
             val count = (prop("track-list/count")?.toIntOrNull() ?: 0).coerceIn(0, 48)
             val countAudio = (0 until count).count { prop("track-list/" + it + "/type") == "audio" }
             val activeAudio = prop("aid") ?: "unknown"
+            if (countAudio > 0 && activeAudio == "no" &&
+                !audioRecoveryAttempted) {
+                // Track exists but mpv has not selected it. Request auto once,
+                // not every second (changing it repeatedly can restart audio).
+                audioRecoveryAttempted = true
+                val result = l.mpv_set_property_string(ctx, "aid", "auto")
+                audioAttachmentStatus += if (result >= 0)
+                    "; requested track auto-selection"
+                else "; audio auto-selection rejected (code " + result + ")"
+            }
             if (activeAudio != "no" && activeAudio != "unknown" &&
                 audioAttachmentStatus.startsWith("audio-add accepted")) {
                 audioAttachmentStatus = "external audio selected"
@@ -199,6 +210,7 @@ internal class MpvNativeController {
         pendingAudioUrl = null
         audioAttachmentStatus = "not required"
         fileLoaded = false
+        audioRecoveryAttempted = false
         runCatching { l?.mpv_terminate_destroy(ptr) }
     }
 }
