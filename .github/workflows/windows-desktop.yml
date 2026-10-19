@@ -34,12 +34,16 @@ jobs:
           distribution: temurin
           java-version: '21'
 
-      - name: Install Android SDK tools for shared project configuration
-        uses: android-actions/setup-android@v3
-
-      - name: Install Android API 37 used by upstream
+      - name: Install Android API 37 using the runner's preinstalled SDK
         shell: pwsh
-        run: sdkmanager "platforms;android-37"
+        run: |
+          $sdkRoot = $env:ANDROID_HOME
+          if (-not $sdkRoot) { throw "ANDROID_HOME is missing from Windows runner" }
+          $sdkManager = Get-ChildItem -Path (Join-Path $sdkRoot 'cmdline-tools') -Recurse -File -Filter 'sdkmanager.bat' |
+            Select-Object -First 1 -ExpandProperty FullName
+          if (-not $sdkManager) { throw "Android sdkmanager.bat not found" }
+          & $sdkManager "--sdk_root=$sdkRoot" "platforms;android-37"
+          if ($LASTEXITCODE -ne 0) { throw "Android SDK installation failed" }
 
       - name: Configure Gradle
         uses: gradle/actions/setup-gradle@v4
