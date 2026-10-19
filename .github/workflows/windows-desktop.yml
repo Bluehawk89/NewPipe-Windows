@@ -116,6 +116,39 @@ jobs:
         shell: pwsh
         run: .\gradlew.bat :desktopApp:packageMsi --stacktrace --no-configuration-cache
 
+      - name: Verify packaged Java runtime and GPU memory backend
+        shell: pwsh
+        run: |
+          # Pure JVM tests use a full JDK and missed a real packaged-app
+          # crash. Execute --gpu-preflight on the reduced jlink app image.
+          $ErrorActionPreference = 'Stop'
+          & .\gradlew.bat :desktopApp:createDistributable --stacktrace --no-configuration-cache
+          if ($LASTEXITCODE -ne 0) { throw 'Could not create Windows app-image' }
+          $root = Join-Path $PWD 'desktopApp/build/compose/binaries/main/app'
+          if (-not (Test-Path $root)) { throw 'Windows app-image not created' }
+          $java = Get-ChildItem -Path $root -File -Recurse -Filter 'java.exe' |
+            Where-Object { $_.FullName -match '[\\/]runtime[\\/]bin[\\/]' } |
+            Select-Object -First 1
+          if (-not $java) { throw 'Packaged Java runtime not found' }
+          $modules = & $java.FullName --list-modules
+          if ($LASTEXITCODE -ne 0 -or
+              -not (@($modules | Where-Object { $_ -match '^jdk\.unsupported@' }).Count -gt 0)) {
+            throw 'Packaged Java runtime is missing jdk.unsupported'
+          }
+          $launcher = Get-ChildItem -Path $root -File -Recurse -Filter '*.exe' |
+            Where-Object { $_.Name -eq 'NewPipe Windows Prototype.exe' } |
+            Select-Object -First 1
+          if (-not $launcher) { throw 'Packaged Windows application launcher missing' }
+          $process = Start-Process -FilePath $launcher.FullName -ArgumentList '--gpu-preflight' -PassThru
+          if (-not $process.WaitForExit(30000)) {
+            $process.Kill()
+            throw 'Packaged GPU preflight timed out after 30 seconds'
+          }
+          if ($process.ExitCode -ne 0) {
+            throw "Packaged LWJGL preflight failed (code $($process.ExitCode))"
+          }
+          Write-Host 'Verified packaged Java module and LWJGL backend; no UI needed.'
+
       - name: Upload Windows installer
         uses: actions/upload-artifact@v4
         with:
