@@ -146,7 +146,6 @@ internal fun DesktopVideoPlayer(video: VideoResult, onBack: () -> Unit) {
                         SwingPanel(
                             factory = { player },
                             modifier = Modifier.fillMaxSize(),
-                            background = java.awt.Color.BLACK
                         )
                     }
                     Spacer(Modifier.height(12.dp))
