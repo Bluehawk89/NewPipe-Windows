@@ -10,7 +10,7 @@ import org.junit.Test
 
 class MpvStreamSelectionTest {
     @Test
-    fun masterBeforeSeparateHlsVariantAndVideoOnly() {
+    fun audioPairedHlsVariantBeforeMasterAndVideoOnly() {
         val child = PlaybackOption(
             "https://cdn.example.org/video720.m3u8", "HLS 720p + audio",
             "https://cdn.example.org/audio.m3u8"
@@ -22,8 +22,8 @@ class MpvStreamSelectionTest {
             "https://cdn.example.org/video-only.m3u8", "HLS 360p"
         )
         val ranked = MpvStreamSelection.prioritize(listOf(child, silent, master))
-        assertEquals(master.url, ranked[0].url)
-        assertEquals(child.url, ranked[1].url)
+        assertEquals(child.url, ranked[0].url)
+        assertEquals(master.url, ranked[1].url)
         assertEquals(silent.url, ranked[2].url)
     }
 
@@ -39,7 +39,24 @@ class MpvStreamSelectionTest {
         val ranked = MpvStreamSelection.prioritize(
             listOf(master, dashPair, muxed, invalid, muxed)
         )
-        assertEquals(listOf(muxed, master, dashPair).map { it.url },
+        assertEquals(listOf(muxed, dashPair, master).map { it.url },
+            ranked.map { it.url })
+    }
+
+    @Test
+    fun pairedDashAndHlsAlternativesPrecedeUnpairedMaster() {
+        val unpaired = PlaybackOption("https://cdn.example.org/child", "HLS 360p")
+        val master = PlaybackOption("https://cdn.example.org/master", "HLS master / live stream")
+        val dash = PlaybackOption(
+            "https://cdn.example.org/dash", "Separate tracks MPEG-4 720p + audio",
+            "https://cdn.example.org/dash-audio"
+        )
+        val hls = PlaybackOption(
+            "https://cdn.example.org/hls", "HLS 720p + audio",
+            "https://cdn.example.org/hls-audio"
+        )
+        val ranked = MpvStreamSelection.prioritize(listOf(unpaired, master, hls, dash))
+        assertEquals(listOf(hls, dash, master, unpaired).map { it.url },
             ranked.map { it.url })
     }
 
