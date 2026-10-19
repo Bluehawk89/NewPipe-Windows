@@ -11,6 +11,7 @@ import org.schabi.newpipe.extractor.downloader.Downloader
 import org.schabi.newpipe.extractor.downloader.Request
 import org.schabi.newpipe.extractor.downloader.Response
 import org.schabi.newpipe.extractor.search.SearchInfo
+import org.schabi.newpipe.extractor.stream.StreamInfo
 import org.schabi.newpipe.extractor.stream.StreamInfoItem
 import java.util.concurrent.TimeUnit
 
@@ -74,6 +75,28 @@ internal object DesktopVideoSearch {
                     views = item.viewCount
                 )
             }
+    }
+
+    /**
+     * Obtain a playable progressive video+audio URL for VLC.
+     * Video-only streams need separate audio handling and are intentionally not used yet.
+     */
+    fun resolvePlaybackUrl(videoUrl: String): String {
+        val info = StreamInfo.getInfo(videoUrl)
+        val streams = info.videoStreams.orEmpty()
+            .filter { it.isUrl && it.content.startsWith("https://") }
+            .sortedByDescending { stream ->
+                Regex("(\\d{3,4})").find(stream.resolution.orEmpty())?.value?.toIntOrNull() ?: 0
+            }
+        val stream = streams.firstOrNull { it.resolution.contains("720") }
+            ?: streams.firstOrNull { it.resolution.contains("480") }
+            ?: streams.firstOrNull { it.resolution.contains("360") }
+            ?: streams.firstOrNull()
+        return stream?.content
+            ?: info.hlsUrl?.takeIf { it.startsWith("https://") }
+            ?: throw IllegalStateException(
+                "No compatible combined audio/video stream was found for this video."
+            )
     }
 }
 
