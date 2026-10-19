@@ -132,7 +132,7 @@ internal fun DesktopVideoPlayer(video: VideoResult, onBack: () -> Unit) {
                         while (isActive) {
                             delay(500)
                             runCatching {
-                                player.mediaPlayer().controls().position()
+                                player.mediaPlayer().status().position()
                             }.onSuccess {
                                 if (it.isFinite() && it >= 0f) position = it
                             }
