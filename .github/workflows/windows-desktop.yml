@@ -89,13 +89,24 @@ jobs:
           $dllPath = Join-Path $dest 'libmpv-2.dll'
           $nativeHandle = [System.Runtime.InteropServices.NativeLibrary]::Load($dllPath)
           try {
-            $export = [System.Runtime.InteropServices.NativeLibrary]::GetExport(
-              $nativeHandle, 'mpv_create'
+            $required = @(
+              'mpv_create', 'mpv_initialize', 'mpv_command',
+              'mpv_render_context_create',
+              'mpv_render_context_set_update_callback',
+              'mpv_render_context_update',
+              'mpv_render_context_render',
+              'mpv_render_context_report_swap',
+              'mpv_render_context_free'
             )
-            if ($export -eq [IntPtr]::Zero) {
-              throw 'Windows loaded mpv DLL but mpv_create is missing.'
+            foreach ($symbol in $required) {
+              $export = [System.Runtime.InteropServices.NativeLibrary]::GetExport(
+                $nativeHandle, $symbol
+              )
+              if ($export -eq [IntPtr]::Zero) {
+                throw "Native mpv export missing: $symbol"
+              }
             }
-            Write-Host 'Windows loaded pinned libmpv and located mpv_create'
+            Write-Host 'Windows loaded pinned libmpv and validated render API exports'
           }
           finally {
             [System.Runtime.InteropServices.NativeLibrary]::Free($nativeHandle)
