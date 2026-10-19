@@ -59,6 +59,7 @@ internal fun DesktopMpvComparisonPlayer(video: VideoResult) {
     var reading by remember(video.url) { mutableStateOf<MpvReading?>(null) }
     var volume by remember(video.url) { mutableFloatStateOf(100f) }
     var copied by remember(video.url) { mutableStateOf(false) }
+    var audioHttpReport by remember(video.url) { mutableStateOf("not checked") }
     val surface = remember(video.url) {
         Canvas().apply { background = java.awt.Color.BLACK }
     }
@@ -100,6 +101,7 @@ internal fun DesktopMpvComparisonPlayer(video: VideoResult) {
         val candidate = source ?: return@LaunchedEffect
         error = null
         reading = null
+        audioHttpReport = "not checked"
         var ready = false
         for (attempt in 0 until 80) {
             if (surface.isShowing && surface.width > 0 && surface.height > 0) {
@@ -122,6 +124,22 @@ internal fun DesktopMpvComparisonPlayer(video: VideoResult) {
             while (isActive) {
                 delay(1000)
                 reading = withContext(Dispatchers.IO) { controller.snapshot() }
+            }
+        }
+    }
+
+    // Probe a silent separate audio rendition once, after mpv has had time
+    // to load it. The probe verifies network access, not audible sound.
+    LaunchedEffect(source, reading?.activeAudio) {
+        val audioUrl = source?.audioUrl
+        if (audioUrl != null && reading?.activeAudio == "no" &&
+            audioHttpReport == "not checked") {
+            delay(7000)
+            if (reading?.activeAudio == "no") {
+                audioHttpReport = "checking"
+                audioHttpReport = withContext(Dispatchers.IO) {
+                    MpvAudioProbe.inspect(audioUrl)
+                }
             }
         }
     }
@@ -170,6 +188,9 @@ internal fun DesktopMpvComparisonPlayer(video: VideoResult) {
                         " | output: " + (current?.audioOutput ?: "?")
                 )
                 Text("External audio: " + (current?.externalAudioStatus ?: "not checked"))
+                if (source?.audioUrl != null) {
+                    Text("Audio endpoint: " + audioHttpReport)
+                }
                 if (current?.activeAudio == "no" ||
                     current?.activeAudio == "0" ||
                     current?.activeAudio == "unknown") {
@@ -228,6 +249,7 @@ internal fun DesktopMpvComparisonPlayer(video: VideoResult) {
                         "Audio codec: " + (current?.audioCodec ?: "unknown"),
                         "Audio output: " + (current?.audioOutput ?: "unknown"),
                         "Core error: " + (current?.coreError ?: "unknown"),
+                        "External audio HTTP: " + audioHttpReport,
                         "Video: " + (current?.activeVideo ?: "unknown"),
                         "Audio: " + (current?.activeAudio ?: "unknown"),
                         "Video width: " + (current?.videoWidth ?: "unknown"),
