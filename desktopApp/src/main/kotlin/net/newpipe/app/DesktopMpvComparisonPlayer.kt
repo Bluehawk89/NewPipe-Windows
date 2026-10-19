@@ -25,6 +25,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -51,7 +52,9 @@ import java.awt.datatransfer.StringSelection
  */
 @Composable
 internal fun DesktopMpvComparisonPlayer(video: VideoResult) {
-    var source by remember(video.url) { mutableStateOf<PlaybackOption?>(null) }
+    var candidates by remember(video.url) { mutableStateOf<List<PlaybackOption>>(emptyList()) }
+    var selectedIndex by remember(video.url) { mutableIntStateOf(0) }
+    val source = candidates.getOrNull(selectedIndex)
     var error by remember(video.url) { mutableStateOf<String?>(null) }
     var reading by remember(video.url) { mutableStateOf<MpvReading?>(null) }
     var volume by remember(video.url) { mutableFloatStateOf(100f) }
@@ -77,10 +80,19 @@ internal fun DesktopMpvComparisonPlayer(video: VideoResult) {
         error = null
         reading = null
         try {
-            source = withContext(Dispatchers.IO) {
-                DesktopVideoSearch.resolvePlaybackOptions(video.url).firstOrNull()
+            candidates = withContext(Dispatchers.IO) {
+                val all = DesktopVideoSearch.resolvePlaybackOptions(video.url)
+                // Let mpv negotiate all rendition groups from the HLS
+                // master itself before trying video-only child playlists.
+                val masters = all.filter { it.label.startsWith("HLS master") }
+                val muxed = all.filter {
+                    it.audioUrl == null && !it.label.startsWith("HLS") &&
+                        !it.label.startsWith("DASH")
+                }
+                (muxed + masters + all).distinctBy { it.url }.take(14)
             }
-            if (source == null) error = "NewPipe Extractor did not find a playable format."
+            selectedIndex = 0
+            if (candidates.isEmpty()) error = "NewPipe Extractor did not find a playable format."
         } catch (e: CancellationException) {
             throw e
         } catch (_: Exception) {
@@ -92,11 +104,13 @@ internal fun DesktopMpvComparisonPlayer(video: VideoResult) {
     // we supply that window id to libmpv.
     LaunchedEffect(surface, source) {
         val candidate = source ?: return@LaunchedEffect
+        error = null
+        reading = null
         var ready = false
-        repeat(80) {
+        for (attempt in 0 until 80) {
             if (surface.isShowing && surface.width > 0 && surface.height > 0) {
                 ready = true
-                return@repeat
+                break
             }
             delay(100)
         }
@@ -105,6 +119,9 @@ internal fun DesktopMpvComparisonPlayer(video: VideoResult) {
             return@LaunchedEffect
         }
         error = withContext(Dispatchers.IO) {
+            // For the next candidate, stop the previous decoder and audio
+            // before attaching another HLS playlist to the same HWND.
+            controller.close()
             controller.open(surface, candidate)
         }
         if (error == null) {
@@ -129,11 +146,14 @@ internal fun DesktopMpvComparisonPlayer(video: VideoResult) {
         }
         Spacer(Modifier.height(10.dp))
         Column(
-            modifier = Modifier.fillMaxWidth().height(190.dp)
+            modifier = Modifier.fillMaxWidth().height(252.dp)
                 .verticalScroll(rememberScrollState())
         ) {
             val candidate = source
-            Text("Format: " + (candidate?.label ?: "Resolving…"))
+            Text(
+                "Format " + (selectedIndex + 1) + "/" + candidates.size + ": " +
+                    (candidate?.label ?: "Resolving…")
+            )
             if (error != null) {
                 Text(error.orEmpty(), color = Color(0xFFFF9898))
             } else if (reading == null) {
@@ -150,11 +170,17 @@ internal fun DesktopMpvComparisonPlayer(video: VideoResult) {
                         " | audio sample rate: " + (current?.audioRate ?: "?") +
                         " | A/V offset: " + (current?.aVSync ?: "?")
                 )
+                Text(
+                    "Audio streams found: " + (current?.audioTrackCount ?: 0) +
+                        " | audio codec: " + (current?.audioCodec ?: "?") +
+                        " | output: " + (current?.audioOutput ?: "?")
+                )
+                Text("External audio: " + (current?.externalAudioStatus ?: "not checked"))
                 if (current?.activeAudio == "no" ||
                     current?.activeAudio == "0" ||
                     current?.activeAudio == "unknown") {
                     Text(
-                        "No active audio detected yet; the selected stream may be video only.",
+                        "No active audio track. Select another stream to test the full HLS master or an audio-paired rendition.",
                         color = Color(0xFFFF9898)
                     )
                 }
@@ -164,6 +190,10 @@ internal fun DesktopMpvComparisonPlayer(video: VideoResult) {
             }
             Spacer(Modifier.height(8.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(
+                    enabled = selectedIndex < candidates.lastIndex,
+                    onClick = { selectedIndex += 1 }
+                ) { Text("Try next stream") }
                 OutlinedButton(onClick = {
                     scope.launch(Dispatchers.IO) {
                         controller.pause(reading?.isPaused != true)
@@ -193,11 +223,17 @@ internal fun DesktopMpvComparisonPlayer(video: VideoResult) {
                 Button(onClick = {
                     val current = reading
                     val report = listOf(
-                        "Unofficial Windows native mpv A/B test",
+                        "Unofficial Windows native mpv M2.8 audio A/B test",
                         "Video: " + video.url,
                         "Format: " + (source?.label ?: "unknown"),
                         "Separate audio declared: " + (source?.audioUrl != null),
                         "Native playback error: " + (error ?: "none"),
+                        "Selected option: " + (selectedIndex + 1) + "/" + candidates.size,
+                        "External audio command: " + (current?.externalAudioStatus ?: "unknown"),
+                        "Audio tracks detected: " + (current?.audioTrackCount ?: 0),
+                        "Audio codec: " + (current?.audioCodec ?: "unknown"),
+                        "Audio output: " + (current?.audioOutput ?: "unknown"),
+                        "Core error: " + (current?.coreError ?: "unknown"),
                         "Video: " + (current?.activeVideo ?: "unknown"),
                         "Audio: " + (current?.activeAudio ?: "unknown"),
                         "Video width: " + (current?.videoWidth ?: "unknown"),
