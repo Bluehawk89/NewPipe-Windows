@@ -29,6 +29,13 @@ dependencies {
     implementation("uk.co.caprica:vlcj:4.11.0")
     // Experimental native libmpv bridge (no Android, browser or emulator).
     implementation("net.java.dev.jna:jna:5.17.0")
+    // Separate libmpv OpenGL render-API proof of concept. This adds a real
+    // GPU framebuffer renderer without changing the verified mpv HWND path.
+    implementation("org.lwjglx:lwjgl3-awt:0.2.5")
+    implementation("org.lwjgl:lwjgl:3.4.2")
+    implementation("org.lwjgl:lwjgl-opengl:3.4.2")
+    runtimeOnly("org.lwjgl:lwjgl:3.4.2:natives-windows")
+    runtimeOnly("org.lwjgl:lwjgl-opengl:3.4.2:natives-windows")
 
     // Portable JVM parser and playback regression tests (no GUI/network needed).
     testImplementation(libs.junit)

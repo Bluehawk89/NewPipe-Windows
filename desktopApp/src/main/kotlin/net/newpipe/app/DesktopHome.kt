@@ -85,6 +85,7 @@ internal fun DesktopHome(onAbout: () -> Unit) {
     // During the experimental quality audit prefer the user-verified mpv
     // backend, while leaving the VLC baseline accessible for comparison.
     var engineComparisonMpv by remember { mutableStateOf(true) }
+    var gpuRendererExperiment by remember { mutableStateOf(false) }
     var searchGeneration by remember { mutableIntStateOf(0) }
     val scope = rememberCoroutineScope()
     var searchJob by remember { mutableStateOf<Job?>(null) }
@@ -97,6 +98,7 @@ internal fun DesktopHome(onAbout: () -> Unit) {
         // search results obscured behind a still-playing media surface.
         selectedVideo = null
         engineComparisonMpv = true
+        gpuRendererExperiment = false
         query = clean
         searchedTerm = clean
         section = Section.SEARCH
@@ -203,6 +205,7 @@ internal fun DesktopHome(onAbout: () -> Unit) {
                             views = -1L
                         )
                         engineComparisonMpv = true
+                        gpuRendererExperiment = false
                     }) { Text("Open known playback test video") }
                     Spacer(Modifier.height(12.dp))
                     val selected = selectedVideo
@@ -214,19 +217,35 @@ internal fun DesktopHome(onAbout: () -> Unit) {
                             OutlinedButton(onClick = {
                                 selectedVideo = null
                                 engineComparisonMpv = true
+                                gpuRendererExperiment = false
                                 section = Section.SEARCH
                             }) { Text("← Search results") }
                             Button(
-                                enabled = engineComparisonMpv,
-                                onClick = { engineComparisonMpv = false }
+                                enabled = !engineComparisonMpv || gpuRendererExperiment,
+                                onClick = {
+                                    engineComparisonMpv = false
+                                    gpuRendererExperiment = false
+                                }
                             ) { Text("VLC baseline") }
                             Button(
-                                enabled = !engineComparisonMpv,
-                                onClick = { engineComparisonMpv = true }
-                            ) { Text("mpv (preferred test)") }
+                                enabled = !engineComparisonMpv || gpuRendererExperiment,
+                                onClick = {
+                                    engineComparisonMpv = true
+                                    gpuRendererExperiment = false
+                                }
+                            ) { Text("mpv (working)") }
+                            OutlinedButton(
+                                enabled = !gpuRendererExperiment,
+                                onClick = {
+                                    engineComparisonMpv = true
+                                    gpuRendererExperiment = true
+                                }
+                            ) { Text("GPU renderer (alpha)") }
                         }
                         Spacer(Modifier.height(8.dp))
-                        if (engineComparisonMpv) {
+                        if (gpuRendererExperiment) {
+                            DesktopMpvGpuPlayer(video = selected)
+                        } else if (engineComparisonMpv) {
                             DesktopMpvComparisonPlayer(video = selected)
                         } else {
                             DesktopVideoPlayer(video = selected, onBack = {
@@ -273,6 +292,7 @@ internal fun DesktopHome(onAbout: () -> Unit) {
                                         items(results) { video ->
                                             VideoRow(video, onPlay = {
                                                 engineComparisonMpv = true
+                                                gpuRendererExperiment = false
                                                 selectedVideo = video
                                             })
                                         }
