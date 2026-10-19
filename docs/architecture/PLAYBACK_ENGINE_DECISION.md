@@ -104,6 +104,18 @@ For every case measure: **both moving image and audible sound**, A/V alignment s
 - Do not fetch and execute unverified DLLs at runtime. Pin sha256 checksums, ship architecture-matched signed/reproducible libraries, audit dependencies, publish GPL sources and attribution.
 - Automatic updates require independent application branding, integrity checking, rollback and user consent.
 
+## 5A. M2.8 Windows A/B outcome (confirmed by supervisor)
+
+**New evidence, October 2026:** On the known regression video `XaSjdZ2MUkU`, the supervisor reports:
+
+- libmpv's initial **HLS master** candidate did not work.
+- **All other mpv candidate formats they tested played with synchronized audio and video.** This is meaningful actual Windows A/V success, following the earlier first experiment which decoded video but had no selected audio track.
+- The **LibVLC** implementation still exhibits the same scrolling-linked rendering and intermittent sound/video failures.
+
+**Updated working recommendation:** libmpv is the **preferred engine candidate** for further implementation; stop investing in repeatedly patching LibVLC's existing AWT HWND path as the primary v1.0 solution. Retain the working search UI, the VLC baseline for regression comparisons, and rollback ability. New M2.9 changes prioritize explicitly paired A/V streams above the failing HLS master and add bounded startup failover.
+
+**What is not yet established:** libmpv render API performance or correctness in Compose Desktop, sustained A/V sync in hour-long and live playback, fullscreen/scaling/DPI, resuming from suspend, seeking and track switching across all formats, packaging/licensing across Windows releases, and native-crash/handle cleanup. These still gate production selection and v1.0 readiness.
+
 ## 6. Architecture decision and milestones
 
 **Decision today:** Do **not** declare VLC bug fixed or choose the final renderer. **Evaluate libmpv render API as the primary replacement candidate**, with LibVLC as a comparable baseline and GStreamer as contingency. The current code/installer remains a private development prototype with no forced migration.
