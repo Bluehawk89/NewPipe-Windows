@@ -92,6 +92,11 @@ internal fun DesktopHome(onAbout: () -> Unit) {
     fun doSearch(term: String = query) {
         val clean = term.trim()
         if (clean.isEmpty()) return
+        // Searching is a navigation action. Release the active video
+        // composition/player before showing results, rather than leaving
+        // search results obscured behind a still-playing media surface.
+        selectedVideo = null
+        engineComparisonMpv = true
         query = clean
         searchedTerm = clean
         section = Section.SEARCH
