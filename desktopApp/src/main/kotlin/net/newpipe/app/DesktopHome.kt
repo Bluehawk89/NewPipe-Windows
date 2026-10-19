@@ -82,10 +82,11 @@ internal fun DesktopHome(onAbout: () -> Unit) {
     var loading by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     var selectedVideo by remember { mutableStateOf<VideoResult?>(null) }
-    // During the experimental quality audit prefer the user-verified mpv
-    // backend, while leaving the VLC baseline accessible for comparison.
-    var engineComparisonMpv by remember { mutableStateOf(true) }
+    // Only the user-verified mpv is offered for normal watching.
+    // VLC remains preserved in Git history for engineering comparisons.
     var gpuRendererExperiment by remember { mutableStateOf(false) }
+    var gpuCheckPending by remember { mutableStateOf(false) }
+    var gpuWarning by remember { mutableStateOf<String?>(null) }
     var searchGeneration by remember { mutableIntStateOf(0) }
     val scope = rememberCoroutineScope()
     var searchJob by remember { mutableStateOf<Job?>(null) }
@@ -97,8 +98,8 @@ internal fun DesktopHome(onAbout: () -> Unit) {
         // composition/player before showing results, rather than leaving
         // search results obscured behind a still-playing media surface.
         selectedVideo = null
-        engineComparisonMpv = true
         gpuRendererExperiment = false
+        gpuWarning = null
         query = clean
         searchedTerm = clean
         section = Section.SEARCH
@@ -160,6 +161,8 @@ internal fun DesktopHome(onAbout: () -> Unit) {
                             selected = section == entry,
                             onClick = {
                                 selectedVideo = null
+                                gpuRendererExperiment = false
+                                gpuWarning = null
                                 section = entry
                             }
                         )
@@ -204,8 +207,7 @@ internal fun DesktopHome(onAbout: () -> Unit) {
                             durationSeconds = 0L,
                             views = -1L
                         )
-                        engineComparisonMpv = true
-                        gpuRendererExperiment = false
+                                        gpuRendererExperiment = false
                     }) { Text("Open known playback test video") }
                     Spacer(Modifier.height(12.dp))
                     val selected = selectedVideo
@@ -216,42 +218,60 @@ internal fun DesktopHome(onAbout: () -> Unit) {
                         ) {
                             OutlinedButton(onClick = {
                                 selectedVideo = null
-                                engineComparisonMpv = true
                                 gpuRendererExperiment = false
+                                gpuWarning = null
                                 section = Section.SEARCH
                             }) { Text("← Search results") }
                             Button(
-                                enabled = !engineComparisonMpv || gpuRendererExperiment,
+                                enabled = gpuRendererExperiment,
                                 onClick = {
-                                    engineComparisonMpv = false
                                     gpuRendererExperiment = false
+                                    gpuWarning = null
                                 }
-                            ) { Text("VLC baseline") }
-                            Button(
-                                enabled = !engineComparisonMpv || gpuRendererExperiment,
-                                onClick = {
-                                    engineComparisonMpv = true
-                                    gpuRendererExperiment = false
-                                }
-                            ) { Text("mpv (working)") }
+                            ) { Text("mpv player") }
                             OutlinedButton(
-                                enabled = !gpuRendererExperiment,
+                                enabled = !gpuRendererExperiment && !gpuCheckPending,
                                 onClick = {
-                                    engineComparisonMpv = true
-                                    gpuRendererExperiment = true
+                                    gpuCheckPending = true
+                                    gpuWarning = null
+                                    scope.launch {
+                                        // The packaged Java image may omit
+                                        // LWJGL's Unsafe backend. Do not
+                                        // construct an AWTGLCanvas until
+                                        // that preflight passes.
+                                        val failure = withContext(Dispatchers.IO) {
+                                            GpuRuntimePreflight.check()
+                                        }
+                                        gpuCheckPending = false
+                                        if (selectedVideo?.url != selected.url) return@launch
+                                        if (failure == null) {
+                                            gpuRendererExperiment = true
+                                        } else {
+                                            gpuRendererExperiment = false
+                                            gpuWarning = failure
+                                        }
+                                    }
                                 }
-                            ) { Text("GPU renderer (alpha)") }
+                            ) { Text(if (gpuCheckPending) "Checking GPU…" else "GPU lab (alpha)") }
+                        }
+                        if (gpuWarning != null) {
+                            Text(
+                                gpuWarning.orEmpty() + " Using the mpv player.",
+                                color = Color(0xFFFFAEAE),
+                                style = MaterialTheme.typography.bodySmall
+                            )
                         }
                         Spacer(Modifier.height(8.dp))
                         if (gpuRendererExperiment) {
-                            DesktopMpvGpuPlayer(video = selected)
-                        } else if (engineComparisonMpv) {
-                            DesktopMpvComparisonPlayer(video = selected)
+                            DesktopMpvGpuPlayer(
+                                video = selected,
+                                onFatalError = { safeMessage ->
+                                    gpuWarning = safeMessage
+                                    gpuRendererExperiment = false
+                                }
+                            )
                         } else {
-                            DesktopVideoPlayer(video = selected, onBack = {
-                                selectedVideo = null
-                                section = Section.SEARCH
-                            })
+                            DesktopMpvComparisonPlayer(video = selected)
                         }
                     } else when (section) {
                         Section.HOME -> HomeWelcome(onQuickSearch = { doSearch(it) })
@@ -291,8 +311,7 @@ internal fun DesktopHome(onAbout: () -> Unit) {
                                     LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                                         items(results) { video ->
                                             VideoRow(video, onPlay = {
-                                                engineComparisonMpv = true
-                                                gpuRendererExperiment = false
+                                                                                        gpuRendererExperiment = false
                                                 selectedVideo = video
                                             })
                                         }

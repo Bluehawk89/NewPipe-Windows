@@ -97,7 +97,7 @@ internal fun DesktopMpvComparisonPlayer(video: VideoResult) {
         } catch (e: CancellationException) {
             throw e
         } catch (_: Exception) {
-            error = "Stream extraction failed; try the VLC baseline player."
+            error = "Stream extraction failed. Try searching again."
         }
     }
 
@@ -201,11 +201,11 @@ internal fun DesktopMpvComparisonPlayer(video: VideoResult) {
     }
 
     Column(modifier = Modifier.fillMaxSize()) {
-        Text("mpv experimental engine — native Windows A/B playback test")
+        Text("mpv player — native Windows playback")
         Text(video.title, color = Color(0xFFDEE4F1))
         Text(
-            "This compares decoding, audio and stability. Its embedded-window renderer " +
-                "is not our proposed final GPU renderer.",
+            "Native audio/video playback. GPU rendering is being evaluated separately " +
+                "in an optional test mode.",
             color = Color(0xFFADB4C4)
         )
         Spacer(Modifier.height(10.dp))
@@ -294,7 +294,7 @@ internal fun DesktopMpvComparisonPlayer(video: VideoResult) {
                 Button(onClick = {
                     val current = reading
                     val report = listOf(
-                        "Unofficial Windows native mpv M2.8 audio A/B test",
+                        "Unofficial Windows native mpv playback report",
                         "Video: " + video.url,
                         "Format: " + (source?.label ?: "unknown"),
                         "Separate audio declared: " + (source?.audioUrl != null),

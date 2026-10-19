@@ -116,6 +116,42 @@ jobs:
         shell: pwsh
         run: .\gradlew.bat :desktopApp:packageMsi --stacktrace --no-configuration-cache
 
+      - name: Verify packaged Java runtime and GPU memory backend
+        shell: pwsh
+        run: |
+          # Verify the ACTUAL jlink application image, not the build JDK.
+          # jpackage may strip java.exe, so inspect its modules with the
+          # host JDK jimage tool and launch the packaged app for preflight.
+          $ErrorActionPreference = 'Stop'
+          & .\gradlew.bat :desktopApp:createDistributable --stacktrace --no-configuration-cache
+          if ($LASTEXITCODE -ne 0) { throw 'Could not create Windows app-image' }
+          $root = Join-Path $PWD 'desktopApp/build/compose/binaries/main/app'
+          if (-not (Test-Path $root)) { throw 'Windows app-image not created' }
+          $modulesFile = Get-ChildItem -Path $root -File -Recurse -Filter 'modules' |
+            Where-Object { $_.FullName -match '[\\/]runtime[\\/]lib[\\/]modules$' } |
+            Select-Object -First 1
+          if (-not $modulesFile) { throw 'Packaged runtime lib/modules not found' }
+          $jimage = Join-Path $env:JAVA_HOME 'bin/jimage.exe'
+          if (-not (Test-Path $jimage)) { throw 'Java image inspector unavailable' }
+          $modules = & $jimage list $modulesFile.FullName
+          if ($LASTEXITCODE -ne 0 -or
+              -not (@($modules | Where-Object { $_ -match '^\s*Module:\s+jdk\.unsupported\s*$' }).Count -gt 0)) {
+            throw 'Packaged Java runtime is missing jdk.unsupported'
+          }
+          $launcher = Get-ChildItem -Path $root -File -Recurse -Filter '*.exe' |
+            Where-Object { $_.Name -eq 'NewPipe Windows Prototype.exe' } |
+            Select-Object -First 1
+          if (-not $launcher) { throw 'Packaged Windows application launcher missing' }
+          $process = Start-Process -FilePath $launcher.FullName -ArgumentList '--gpu-preflight' -PassThru
+          if (-not $process.WaitForExit(30000)) {
+            $process.Kill()
+            throw 'Packaged GPU preflight timed out after 30 seconds'
+          }
+          if ($process.ExitCode -ne 0) {
+            throw "Packaged LWJGL preflight failed (code $($process.ExitCode))"
+          }
+          Write-Host 'Verified packaged Java module and LWJGL backend; no UI needed.'
+
       - name: Upload Windows installer
         uses: actions/upload-artifact@v4
         with:

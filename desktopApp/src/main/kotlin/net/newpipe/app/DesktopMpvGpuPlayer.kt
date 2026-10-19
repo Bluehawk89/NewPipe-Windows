@@ -46,7 +46,7 @@ import java.awt.datatransfer.StringSelection
  * but hosted via SwingPanel until texture compositing into Compose is proven.
  */
 @Composable
-internal fun DesktopMpvGpuPlayer(video: VideoResult) {
+internal fun DesktopMpvGpuPlayer(video: VideoResult, onFatalError: (String) -> Unit) {
     var options by remember(video.url) { mutableStateOf<List<PlaybackOption>>(emptyList()) }
     var selected by remember(video.url) { mutableIntStateOf(0) }
     var error by remember(video.url) { mutableStateOf<String?>(null) }
@@ -55,7 +55,25 @@ internal fun DesktopMpvGpuPlayer(video: VideoResult) {
     var paused by remember(video.url) { mutableStateOf(false) }
     var copied by remember(video.url) { mutableStateOf(false) }
     val bridge = remember(video.url) { MpvGlRenderBridge() }
-    val canvas = remember(video.url) { MpvGpuCanvas(bridge) { rendererReady = true } }
+    val canvasResult = remember(video.url) {
+        runCatching {
+            MpvGpuCanvas(
+                bridge = bridge,
+                onReady = { rendererReady = true },
+                onFailure = onFatalError
+            )
+        }
+    }
+    val canvas = canvasResult.getOrNull()
+    if (canvas == null) {
+        // Class initialization can fail before AWT even creates a canvas.
+        // Never let a runtime LinkageError crash Compose composition.
+        LaunchedEffect(video.url) {
+            onFatalError("The experimental OpenGL canvas could not initialize.")
+        }
+        Text("GPU unavailable. Restoring normal mpv playback.")
+        return
+    }
     val scope = rememberCoroutineScope()
     val current = options.getOrNull(selected)
 
@@ -103,6 +121,7 @@ internal fun DesktopMpvGpuPlayer(video: VideoResult) {
         }
         if (!attached) {
             error = "OpenGL window did not appear."
+            onFatalError(error.orEmpty())
             return@LaunchedEffect
         }
         var ready = false
@@ -116,10 +135,14 @@ internal fun DesktopMpvGpuPlayer(video: VideoResult) {
         }
         if (!ready) {
             error = bridge.lastFailure ?: "GPU renderer did not initialize."
+            onFatalError(error.orEmpty())
             return@LaunchedEffect
         }
         error = withContext(Dispatchers.IO) { bridge.play(source) }
-        if (error != null) return@LaunchedEffect
+        if (error != null) {
+            onFatalError(error.orEmpty())
+            return@LaunchedEffect
+        }
         while (isActive) {
             delay(1000)
             status = withContext(Dispatchers.IO) { bridge.poll() }

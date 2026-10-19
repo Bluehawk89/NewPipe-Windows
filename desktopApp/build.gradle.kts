@@ -49,6 +49,11 @@ compose.desktop {
             // Native app resources are OS-scoped. The Windows CI job adds
             // checksum-verified, first-party libmpv only to windows-x64.
             appResourcesRootDir.set(project.layout.projectDirectory.dir("appResources"))
+            // LWJGL's Java 21 memory backend uses sun.misc.Unsafe. Compose
+            // jlink images omit dynamic runtime dependencies unless explicit.
+            // Missing jdk.unsupported produced a real packaged-app crash:
+            // "Failed to initialize a backend for MemoryUtil".
+            modules("jdk.unsupported", "jdk.unsupported.desktop")
             targetFormats(TargetFormat.Dmg, TargetFormat.Msi, TargetFormat.Deb)
             // Temporary development branding; use a distinct name before public release.
             packageName = "NewPipe Windows Prototype"
