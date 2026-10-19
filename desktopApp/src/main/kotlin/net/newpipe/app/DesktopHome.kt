@@ -268,6 +268,12 @@ internal fun DesktopHome(onAbout: () -> Unit) {
                                 onFatalError = { safeMessage ->
                                     gpuWarning = safeMessage
                                     gpuRendererExperiment = false
+                                },
+                                onClose = {
+                                    // Native X, Escape, or visible GPU exit
+                                    // always return to the known mpv player.
+                                    gpuRendererExperiment = false
+                                    gpuWarning = null
                                 }
                             )
                         } else {
