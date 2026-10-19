@@ -42,6 +42,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withContext
+import uk.co.caprica.vlcj.media.MediaSlavePriority
+import uk.co.caprica.vlcj.media.MediaSlaveType
 import uk.co.caprica.vlcj.player.component.EmbeddedMediaPlayerComponent
 import java.awt.Desktop
 import java.awt.Toolkit
@@ -68,6 +70,12 @@ internal fun DesktopVideoPlayer(video: VideoResult, onBack: () -> Unit) {
     var attemptNotes by remember(video.url) { mutableStateOf<List<String>>(emptyList()) }
     var diagnostics by remember(video.url) { mutableStateOf("") }
     var copyStatus by remember(video.url) { mutableStateOf("") }
+    var audioTrackCount by remember(video.url) { mutableIntStateOf(0) }
+    var selectedAudioTrack by remember(video.url) { mutableIntStateOf(-1) }
+    var audioMuted by remember(video.url) { mutableStateOf(false) }
+    var audioVolume by remember(video.url) { mutableFloatStateOf(100f) }
+    var audioAttached by remember(video.url) { mutableStateOf(false) }
+    var audioWaitTicks by remember(video.url) { mutableIntStateOf(0) }
 
     LaunchedEffect(video.url) {
         options = null
@@ -161,6 +169,10 @@ internal fun DesktopVideoPlayer(video: VideoResult, onBack: () -> Unit) {
                         position = 0f
                         diagnostics = ""
                         copyStatus = ""
+                        audioTrackCount = 0
+                        selectedAudioTrack = -1
+                        audioAttached = false
+                        audioWaitTicks = 0
 
                         try {
                             val accepted = withContext(Dispatchers.IO) {
@@ -169,12 +181,29 @@ internal fun DesktopVideoPlayer(video: VideoResult, onBack: () -> Unit) {
                                 player.mediaPlayer().controls().stop()
                                 // Direct media hosts may treat LibVLC's default HTTP
                                 // User-Agent differently from NewPipe Extractor's.
-                                player.mediaPlayer().media().play(
+                                val media = player.mediaPlayer().media()
+                                val prepared = media.prepare(
                                     candidate.url,
                                     ":http-user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36",
                                     ":http-referrer=https://www.youtube.com/",
                                     ":network-caching=1500"
                                 )
+                                if (!prepared) false else {
+                                    // Attach the audio rendition as a VLC media slave
+                                    // before starting the video, sharing VLC's
+                                    // own playback clock for audio/video sync.
+                                    if (candidate.audioUrl != null) {
+                                        audioAttached = media.slaves()?.add(
+                                            MediaSlaveType.AUDIO,
+                                            MediaSlavePriority.HIGHEST,
+                                            candidate.audioUrl
+                                        ) == true
+                                    }
+                                    player.mediaPlayer().audio().setMute(false)
+                                    player.mediaPlayer().audio().setVolume(audioVolume.toInt())
+                                    player.mediaPlayer().controls().play()
+                                    true
+                                }
                             }
                             var reason: String? = if (!accepted) {
                                 "VLC refused to open this stream."
@@ -260,13 +289,24 @@ internal fun DesktopVideoPlayer(video: VideoResult, onBack: () -> Unit) {
                         }
                     }
 
-                    LaunchedEffect(player, candidate.url) {
+                    LaunchedEffect(player, candidate.url, retryNumber) {
                         while (isActive) {
                             delay(500)
                             runCatching {
                                 player.mediaPlayer().status().position()
                             }.onSuccess {
                                 if (it.isFinite() && it >= 0f) position = it
+                            }
+                            if (started) {
+                                audioWaitTicks += 1
+                                runCatching {
+                                    val sound = player.mediaPlayer().audio()
+                                    Triple(sound.trackCount(), sound.track(), sound.isMute)
+                                }.onSuccess {
+                                    audioTrackCount = it.first
+                                    selectedAudioTrack = it.second
+                                    audioMuted = it.third
+                                }
                             }
                         }
                     }
@@ -300,6 +340,74 @@ internal fun DesktopVideoPlayer(video: VideoResult, onBack: () -> Unit) {
                             if (copyStatus.isNotBlank()) Text(copyStatus)
                         } else {
                             Text("Checking media request status…", style = MaterialTheme.typography.bodySmall)
+                        }
+                    }
+                    Spacer(Modifier.height(10.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("Volume", style = MaterialTheme.typography.bodySmall)
+                        Spacer(Modifier.width(8.dp))
+                        Slider(
+                            value = audioVolume,
+                            onValueChange = {
+                                audioVolume = it
+                                runCatching {
+                                    player.mediaPlayer().audio().setVolume(it.toInt())
+                                }
+                            },
+                            valueRange = 0f..100f,
+                            modifier = Modifier.width(180.dp)
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        OutlinedButton(onClick = {
+                            audioMuted = !audioMuted
+                            runCatching {
+                                player.mediaPlayer().audio().setMute(audioMuted)
+                            }
+                        }) { Text(if (audioMuted) "Unmute" else "Mute") }
+                    }
+                    if (started) {
+                        val audioReport = when {
+                            audioWaitTicks < 6 -> "Checking audio tracks…"
+                            audioTrackCount <= 0 || selectedAudioTrack < 0 ->
+                                "No active audio track detected. This variant may contain video only."
+                            else -> "Audio tracks: " + audioTrackCount +
+                                " · selected track: " + selectedAudioTrack
+                        }
+                        Text(audioReport, style = MaterialTheme.typography.bodySmall,
+                            color = if (audioWaitTicks >= 6 &&
+                                (audioTrackCount <= 0 || selectedAudioTrack < 0))
+                                Color(0xFFFF9898) else Color(0xFFADB4C4))
+                        if (audioWaitTicks >= 6 &&
+                            (audioTrackCount <= 0 || selectedAudioTrack < 0)) {
+                            Text(
+                                if (candidate.audioUrl != null && audioAttached)
+                                    "A separate audio rendition was attached to VLC, " +
+                                        "but VLC has not detected an active audio track."
+                                else if (candidate.audioUrl != null)
+                                    "VLC did not accept this variant's separate audio rendition."
+                                else "This rendition has no separate audio URL; " +
+                                    "try another format or the HLS master.",
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                            OutlinedButton(onClick = {
+                                val report = listOf(
+                                    "Unofficial Windows M2.5 audio diagnostic",
+                                    "Video: " + video.url,
+                                    "Candidate: " + candidate.label,
+                                    "VLC audio tracks: " + audioTrackCount,
+                                    "Selected track: " + selectedAudioTrack,
+                                    "Muted: " + audioMuted,
+                                    "Volume: " + audioVolume.toInt(),
+                                    "Separate audio listed: " + (candidate.audioUrl != null),
+                                    "Audio rendition accepted by VLC: " + audioAttached
+                                ).joinToString("\n")
+                                copyStatus = if (runCatching {
+                                    Toolkit.getDefaultToolkit().systemClipboard.setContents(
+                                        StringSelection(report), null
+                                    )
+                                }.isSuccess) "Audio diagnostics copied" else "Copy failed"
+                            }) { Text("Copy audio diagnostics") }
+                            if (copyStatus.isNotBlank()) Text(copyStatus)
                         }
                     }
                     Spacer(Modifier.height(8.dp))
@@ -453,7 +561,7 @@ private fun buildDiagnostics(
     attempts: List<String>,
     mediaProbe: String
 ): String = (
-    listOf("Unofficial Windows M2.4 playback diagnostic", "Video: " + videoUrl) +
+    listOf("Unofficial Windows M2.5 playback diagnostic", "Video: " + videoUrl) +
         attempts + mediaProbe
 ).joinToString("\n")
 
