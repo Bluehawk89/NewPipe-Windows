@@ -180,7 +180,7 @@ internal object DesktopVideoSearch {
                                 val height = hlsAttribute(metadata, "RESOLUTION")
                                     ?.substringAfter('x', "")?.toIntOrNull()
                                 val audioGroup = hlsAttribute(metadata, "AUDIO")
-                                val audio = audioGroups[audioGroup].orEmpty()
+                                val audio = audioGroup?.let { audioGroups[it] }.orEmpty()
                                     .sortedWith(
                                         compareByDescending<HlsAudioRendition> { it.default }
                                             .thenByDescending { it.language.startsWith("en") }
