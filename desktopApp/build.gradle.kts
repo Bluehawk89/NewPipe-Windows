@@ -27,6 +27,8 @@ dependencies {
     implementation(libs.coil.network.okhttp)
     // Native LibVLC-backed embedded player. Test builds require VLC installed locally.
     implementation("uk.co.caprica:vlcj:4.11.0")
+    // Experimental native libmpv bridge (no Android, browser or emulator).
+    implementation("net.java.dev.jna:jna:5.17.0")
 
     // Portable JVM parser and playback regression tests (no GUI/network needed).
     testImplementation(libs.junit)
@@ -37,6 +39,9 @@ compose.desktop {
         mainClass = "net.newpipe.app.MainKt"
 
         nativeDistributions {
+            // Native app resources are OS-scoped. The Windows CI job adds
+            // checksum-verified, first-party libmpv only to windows-x64.
+            appResourcesRootDir.set(project.layout.projectDirectory.dir("appResources"))
             targetFormats(TargetFormat.Dmg, TargetFormat.Msi, TargetFormat.Deb)
             // Temporary development branding; use a distinct name before public release.
             packageName = "NewPipe Windows Prototype"
