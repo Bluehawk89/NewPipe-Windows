@@ -26,8 +26,16 @@ compose.desktop {
 
         nativeDistributions {
             targetFormats(TargetFormat.Dmg, TargetFormat.Msi, TargetFormat.Deb)
-            packageName = NEWPIPE_APPLICATION_ID_NEW
+            // Temporary development branding; use a distinct name before public release.
+            packageName = "NewPipe Windows Prototype"
             packageVersion = NEWPIPE_VERSION_NAME
+            description = "Experimental Windows desktop build based on NewPipe"
+            windows {
+                menu = true
+                shortcut = true
+                menuGroup = "NewPipe Windows Prototype"
+                dirChooser = true
+            }
         }
     }
 }
