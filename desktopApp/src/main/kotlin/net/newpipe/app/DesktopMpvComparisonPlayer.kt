@@ -70,7 +70,13 @@ internal fun DesktopMpvComparisonPlayer(video: VideoResult) {
         onDispose {
             // Native termination can block while decoder threads wind down;
             // never run that operation on Compose's UI/render thread.
-            Thread({ controller.close() }, "mpv-test-dispose").apply {
+            Thread({
+                // Mute the old session promptly before native teardown
+                // completes. Search/navigation must not leave soundtrack
+                // playing after the video surface disappears.
+                controller.pause(true)
+                controller.close()
+            }, "mpv-test-dispose").apply {
                 isDaemon = true
                 start()
             }
