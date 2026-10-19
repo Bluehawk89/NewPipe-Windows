@@ -6,11 +6,14 @@ package net.newpipe.app
 
 import okhttp3.OkHttpClient
 import okhttp3.RequestBody.Companion.toRequestBody
+import org.schabi.newpipe.extractor.MediaFormat
 import org.schabi.newpipe.extractor.NewPipe
 import org.schabi.newpipe.extractor.downloader.Downloader
 import org.schabi.newpipe.extractor.downloader.Request
 import org.schabi.newpipe.extractor.downloader.Response
 import org.schabi.newpipe.extractor.search.SearchInfo
+import org.schabi.newpipe.extractor.stream.DeliveryMethod
+import org.schabi.newpipe.extractor.stream.VideoStream
 import org.schabi.newpipe.extractor.stream.StreamInfo
 import org.schabi.newpipe.extractor.stream.StreamInfoItem
 import java.util.concurrent.TimeUnit
@@ -78,25 +81,163 @@ internal object DesktopVideoSearch {
     }
 
     /**
-     * Obtain a playable progressive video+audio URL for VLC.
-     * Video-only streams need separate audio handling and are intentionally not used yet.
+     * Return alternative combined audio/video streams, including HLS, so VLC
+     * failures can be recovered without repeating extraction.
      */
-    fun resolvePlaybackUrl(videoUrl: String): String {
+    fun resolvePlaybackOptions(videoUrl: String): List<PlaybackOption> {
         val info = StreamInfo.getInfo(videoUrl)
-        val streams = info.videoStreams.orEmpty()
-            .filter { it.isUrl && it.content.startsWith("https://") }
-            .sortedByDescending { stream ->
-                Regex("(\\d{3,4})").find(stream.resolution.orEmpty())?.value?.toIntOrNull() ?: 0
-            }
-        val stream = streams.firstOrNull { it.resolution.contains("720") }
-            ?: streams.firstOrNull { it.resolution.contains("480") }
-            ?: streams.firstOrNull { it.resolution.contains("360") }
-            ?: streams.firstOrNull()
-        return stream?.content
-            ?: info.hlsUrl?.takeIf { it.startsWith("https://") }
-            ?: throw IllegalStateException(
-                "No compatible combined audio/video stream was found for this video."
+        val progressive = info.videoStreams.orEmpty()
+            .filter { !it.isVideoOnly && it.isUrl && it.content.startsWith("https://") }
+            .sortedWith(
+                compareByDescending<VideoStream> {
+                    if (it.deliveryMethod == DeliveryMethod.PROGRESSIVE_HTTP) 1 else 0
+                }.thenByDescending {
+                    if (it.format == MediaFormat.MPEG_4) 1 else 0
+                }.thenByDescending { qualityPreference(it.resolution) }
             )
+            .map { stream ->
+                PlaybackOption(
+                    url = stream.content,
+                    label = "${stream.format?.name ?: "Video"} ${stream.resolution}".trim()
+                )
+            }
+            .distinctBy { it.url }
+            .take(6)
+
+        val hlsUrl = info.hlsUrl?.takeIf { it.startsWith("https://") }
+        val hls = hlsUrl?.let { listOf(PlaybackOption(it, "HLS master / live stream")) }
+            .orEmpty()
+        // A DASH MPD may be usable even when separate progressive video
+        // and audio are unavailable to the JVM extractor.
+        val dash = info.dashMpdUrl?.takeIf { it.startsWith("https://") }
+            ?.let { listOf(PlaybackOption(it, "DASH manifest")) }
+            .orEmpty()
+        val hlsVariants = hlsUrl?.let { extractHlsVariants(it) }.orEmpty()
+        // Individual HLS variants can play when VLC fails to negotiate the master.
+        // Prefer the master first for correct alternate audio-track negotiation,
+        // then try variants and DASH as fallback.
+        // Prefer properly paired audio+video HLS renditions before a master
+        // that may start silently on older LibVLC 3.x installations.
+        val withAudio = hlsVariants.filter { it.audioUrl != null }
+        val withoutAudio = hlsVariants.filter { it.audioUrl == null }
+        val options = if (info.streamType.toString().contains("LIVE")) {
+            (withAudio + hls + withoutAudio + dash + progressive)
+        } else {
+            (progressive + dash + withAudio + hls + withoutAudio)
+        }.distinctBy { it.url }.take(14)
+        if (options.isEmpty()) {
+            throw IllegalStateException(
+                "No compatible combined audio/video or HLS stream was found for this video."
+            )
+        }
+        return options
+    }
+
+    /**
+     * Read only a small bounded amount of an HLS master playlist. This is run
+     * on the IO dispatcher, never from the desktop UI thread.
+     * URLs are returned to the player but must never be included in diagnostics.
+     */
+    private fun extractHlsVariants(masterUrl: String): List<PlaybackOption> {
+        return try {
+            val outgoing = okhttp3.Request.Builder()
+                .url(masterUrl)
+                .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36")
+                .header("Referer", "https://www.youtube.com/")
+                .get().build()
+            client.newCall(outgoing).execute().use { response ->
+                if (!response.isSuccessful) return emptyList()
+                val text = response.body?.byteStream()?.use {
+                    String(it.readNBytes(256 * 1024), Charsets.UTF_8)
+                } ?: return emptyList()
+                if (!text.trimStart().startsWith("#EXTM3U")) return emptyList()
+                val base = response.request.url.toUri()
+                val lines = text.lineSequence().map { it.trim() }.take(2000).toList()
+                // An HLS master playlist may provide audio as a separate
+                // EXT-X-MEDIA rendition. Direct video variants can be silent.
+                val audioGroups = mutableMapOf<String, MutableList<HlsAudioRendition>>()
+                lines.filter { it.startsWith("#EXT-X-MEDIA:") }.forEach { tag ->
+                    val metadata = tag.substringAfter(':')
+                    if (hlsAttribute(metadata, "TYPE") != "AUDIO") return@forEach
+                    val group = hlsAttribute(metadata, "GROUP-ID") ?: return@forEach
+                    val rawUri = hlsAttribute(metadata, "URI") ?: return@forEach
+                    val resolved = runCatching { base.resolve(rawUri) }.getOrNull()
+                        ?: return@forEach
+                    if (!resolved.scheme.equals("https", ignoreCase = true)) return@forEach
+                    audioGroups.getOrPut(group) { mutableListOf() }.add(
+                        HlsAudioRendition(
+                            url = resolved.toString(),
+                            default = hlsAttribute(metadata, "DEFAULT") == "YES",
+                            language = hlsAttribute(metadata, "LANGUAGE").orEmpty()
+                        )
+                    )
+                }
+                val choices = mutableListOf<PlaybackOption>()
+                var streamMetadata: String? = null
+                for (raw in lines) {
+                    when {
+                        raw.startsWith("#EXT-X-STREAM-INF:") -> streamMetadata = raw.substringAfter(':')
+                        raw.isNotBlank() && !raw.startsWith("#") && streamMetadata != null -> {
+                            val metadata = streamMetadata.orEmpty()
+                            val variantUri = runCatching { base.resolve(raw) }.getOrNull()
+                            if (variantUri?.scheme.equals("https", ignoreCase = true)) {
+                                val height = hlsAttribute(metadata, "RESOLUTION")
+                                    ?.substringAfter('x', "")?.toIntOrNull()
+                                val audioGroup = hlsAttribute(metadata, "AUDIO")
+                                val audio = audioGroup?.let { audioGroups[it] }.orEmpty()
+                                    .sortedWith(
+                                        compareByDescending<HlsAudioRendition> { it.default }
+                                            .thenByDescending { it.language.startsWith("en") }
+                                    ).firstOrNull()
+                                choices.add(
+                                    PlaybackOption(
+                                        url = variantUri.toString(),
+                                        label = (
+                                            if (height == null) "HLS variant"
+                                            else "HLS " + height + "p"
+                                        ) + if (audio != null) " + audio" else "",
+                                        audioUrl = audio?.url
+                                    )
+                                )
+                            }
+                            streamMetadata = null
+                        }
+                    }
+                }
+                choices.distinctBy { it.url }.sortedByDescending { option ->
+                    val h = Regex("(\\d{3,4})p").find(option.label)
+                        ?.groupValues?.getOrNull(1)?.toIntOrNull() ?: 0
+                    if (h <= 720) h else 720 - (h - 720)
+                }.take(8)
+            }
+        } catch (_: Exception) {
+            emptyList()
+        }
+    }
+
+    private fun hlsAttribute(attributes: String, key: String): String? {
+        val expression = Regex(
+            "(?:^|,)\\s*" + Regex.escape(key) + "=(?:\"([^\"]*)\"|([^,]+))"
+        )
+        val match = expression.find(attributes) ?: return null
+        return (match.groupValues[1].ifEmpty { match.groupValues[2] }).trim()
+    }
+
+    private data class HlsAudioRendition(
+        val url: String,
+        val default: Boolean,
+        val language: String
+    )
+
+    fun resolvePlaybackUrl(videoUrl: String): String = resolvePlaybackOptions(videoUrl).first().url
+
+    private fun qualityPreference(resolution: String): Int {
+        val height = Regex("(\\d{3,4})").find(resolution)?.value?.toIntOrNull() ?: 0
+        return when {
+            height in 360..720 -> height
+            height > 720 -> (720 - (height - 720)).coerceAtLeast(0)
+            else -> height
+        }
     }
 }
 
@@ -107,4 +248,10 @@ internal data class VideoResult(
     val thumbnail: String?,
     val durationSeconds: Long,
     val views: Long
+)
+
+internal data class PlaybackOption(
+    val url: String,
+    val label: String,
+    val audioUrl: String? = null
 )
