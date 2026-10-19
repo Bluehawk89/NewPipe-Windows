@@ -121,9 +121,40 @@ internal fun DesktopMpvComparisonPlayer(video: VideoResult) {
             controller.open(surface, candidate)
         }
         if (error == null) {
+            // A successful mpv command only means an input was opened.
+            // An HLS master may still produce no picture/sound, or silent
+            // video. Move on after a grace period instead of requiring the
+            // user to manually skip a known unusable option.
+            var secondsWithoutTracks = 0
+            var secondsVideoOnly = 0
             while (isActive) {
                 delay(1000)
-                reading = withContext(Dispatchers.IO) { controller.snapshot() }
+                val current = withContext(Dispatchers.IO) { controller.snapshot() }
+                reading = current
+                if (current == null || current.isPaused) continue
+                val noVideo = current.activeVideo == "no" ||
+                    current.activeVideo == "unknown"
+                val noAudio = current.activeAudio == "no" ||
+                    current.activeAudio == "unknown"
+                secondsWithoutTracks = if (noVideo && noAudio) {
+                    (secondsWithoutTracks + 1).coerceAtMost(15)
+                } else 0
+                // Wait until video actually advances; do not misclassify
+                // the initial buffering period as permanent audio failure.
+                secondsVideoOnly = if (!noVideo && noAudio &&
+                    (current.timeSeconds ?: 0.0) > 2.0) {
+                    (secondsVideoOnly + 1).coerceAtMost(12)
+                } else 0
+                if (MpvStartupRecovery.advance(
+                        optionsRemain = selectedIndex < candidates.lastIndex,
+                        paused = current.isPaused,
+                        secondsWithoutTracks = secondsWithoutTracks,
+                        secondsVideoOnly = secondsVideoOnly
+                    )
+                ) {
+                    selectedIndex += 1
+                    break
+                }
             }
         }
     }
