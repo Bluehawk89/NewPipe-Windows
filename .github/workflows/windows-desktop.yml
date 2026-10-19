@@ -84,6 +84,22 @@ jobs:
           New-Item -ItemType Directory -Path $dest -Force | Out-Null
           Copy-Item -LiteralPath $dll.FullName -Destination (Join-Path $dest 'libmpv-2.dll')
           Write-Host 'Verified upstream mpv DLL staged for native Windows MSI'
+          # Smoke-check that Windows can resolve the real native library
+          # and its required dependencies before spending time on MSI.
+          $dllPath = Join-Path $dest 'libmpv-2.dll'
+          $nativeHandle = [System.Runtime.InteropServices.NativeLibrary]::Load($dllPath)
+          try {
+            $export = [System.Runtime.InteropServices.NativeLibrary]::GetExport(
+              $nativeHandle, 'mpv_create'
+            )
+            if ($export -eq [IntPtr]::Zero) {
+              throw 'Windows loaded mpv DLL but mpv_create is missing.'
+            }
+            Write-Host 'Windows loaded pinned libmpv and located mpv_create'
+          }
+          finally {
+            [System.Runtime.InteropServices.NativeLibrary]::Free($nativeHandle)
+          }
       
       - name: Package desktop application as MSI
         shell: pwsh
