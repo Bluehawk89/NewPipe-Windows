@@ -48,6 +48,19 @@ jobs:
       - name: Configure Gradle
         uses: gradle/actions/setup-gradle@v4
 
+      - name: Run Windows desktop regression tests
+        shell: pwsh
+        run: .\gradlew.bat :desktopApp:test --stacktrace --no-configuration-cache
+
+      - name: Upload desktop test report on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-desktop-test-report
+          path: desktopApp/build/test-results/test/**
+          if-no-files-found: ignore
+          retention-days: 7
+
       - name: Package desktop application as MSI
         shell: pwsh
         run: .\gradlew.bat :desktopApp:packageMsi --stacktrace --no-configuration-cache
