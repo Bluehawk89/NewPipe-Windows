@@ -129,7 +129,7 @@ internal fun DesktopHome(onAbout: () -> Unit) {
                         Spacer(Modifier.width(10.dp))
                         Column {
                             Text("NewPipe", fontWeight = FontWeight.Bold)
-                            Text("WINDOWS · ALPHA", color = muted, style = MaterialTheme.typography.labelSmall)
+                            Text("UNOFFICIAL WINDOWS ALPHA", color = muted, style = MaterialTheme.typography.labelSmall)
                         }
                     }
                     Spacer(Modifier.height(36.dp))
