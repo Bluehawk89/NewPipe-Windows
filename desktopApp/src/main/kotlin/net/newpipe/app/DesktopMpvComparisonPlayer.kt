@@ -115,10 +115,15 @@ internal fun DesktopMpvComparisonPlayer(video: VideoResult) {
             return@LaunchedEffect
         }
         error = withContext(Dispatchers.IO) {
-            // For the next candidate, stop the previous decoder and audio
-            // before attaching another HLS playlist to the same HWND.
-            controller.close()
-            controller.open(surface, candidate)
+            // Switching formats must not dispose the embedded player or
+            // recreate its native HWND. Keep one mpv session per viewport.
+            controller.openOrSwitch(surface, candidate)
+        }
+        if (error != null && selectedIndex < candidates.lastIndex) {
+            // Immediate native rejection: try another source once rather than
+            // showing a dead player when alternatives are still available.
+            selectedIndex += 1
+            return@LaunchedEffect
         }
         if (error == null) {
             // A successful mpv command only means an input was opened.
@@ -131,7 +136,21 @@ internal fun DesktopMpvComparisonPlayer(video: VideoResult) {
                 delay(1000)
                 val current = withContext(Dispatchers.IO) { controller.snapshot() }
                 reading = current
-                if (current == null || current.isPaused) continue
+                if (current == null) {
+                    secondsWithoutTracks = (secondsWithoutTracks + 1).coerceAtMost(15)
+                    if (MpvStartupRecovery.advance(
+                            optionsRemain = selectedIndex < candidates.lastIndex,
+                            paused = false,
+                            secondsWithoutTracks = secondsWithoutTracks,
+                            secondsVideoOnly = 0
+                        )
+                    ) {
+                        selectedIndex += 1
+                        break
+                    }
+                    continue
+                }
+                if (current.isPaused) continue
                 val noVideo = current.activeVideo == "no" ||
                     current.activeVideo == "unknown"
                 val noAudio = current.activeAudio == "no" ||
